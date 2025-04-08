@@ -1,0 +1,198 @@
+root: /storage_common/nobilm/diffusion
+run_name: difftest
+wandb_project: diffusion
+seed: 7
+dataset_seed: 15
+device: cpu #cuda:0
+mixed_precision: false
+
+# use_grokfast: true
+# use_ema: true
+
+model_builders:
+    - source.model.moreGNNLayers #: freeze #tune
+    - Heads
+
+# bessel basis
+r_max: 15.0
+num_basis: 16
+
+# hyperparams
+latent_dim: 256
+l_max: 2
+
+# --- HEADS --- #
+#[
+#  - field: optional, default=AtomicDataDict.NODE_FEATURES_KEY; key used to index data obj, the value is input to head;
+#  - out_field: to be used from data to compute loss; you will find head_{out_field}
+#  - irreps: irreps outputted by NN
+#]
+heads:
+    - [noise_target, 14x0e] # N = num of atom types + 3 for coords
+
+head_wds: 0.0
+
+head_noise_target_mlp_latent_dimensions: [32]
+head_noise_target_mlp_nonlinearity: swiglu
+head_noise_target_has_bias: true
+head_noise_target_gain: 1.55
+
+# --- D A T A S E T --- #
+dataset_list:
+  - dataset: npz
+    dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch
+    # inmemory: false
+    transforms: [source.transforms.diffusion_transf.coord_noise]
+    key_mapping:
+      coords: pos # blue is the npz kword, red is the kword in code
+      atomic_num: node_types
+
+validation_dataset_list:
+  - validation_dataset: npz
+    validation_dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch # val10k
+    # inmemory: false
+    transforms: [source.transforms.diffusion_transf.coord_noise]
+    key_mapping:
+      coords: pos
+      atomic_num: node_types
+
+# - register fields - #
+node_fields:
+  - node_types # could be not needed
+
+# Field Properties
+num_types: 11 # embedding_dimensionality of node_types, it must be present even if node_types not used in fwd | in one-hot case it is num_classes
+node_attributes: # if fixed (N,) if not fixed (1,N); for coords: same with an additional dim at -1 always equal to 3
+  node_types: # this kword must match the red kword in key_mapping
+    fixed: true # if equal for each frame, if so they must not have the batch dim in the npz
+
+# --- L O S S --- #
+loss_coeffs:
+    - noise_target:
+      - MSELoss
+
+# --- M E T R I C S --- #
+metrics_components:
+    - noise_target:
+      - MSELoss
+
+# --- T R A I N I N G --- #
+dataset_num_workers: 1
+
+accumulation_steps: 1
+batch_size: 32
+train_dloader_n_workers: 32
+
+validation_batch_size: 256
+val_dloader_n_workers: 4
+
+max_epochs: 500
+learning_rate: 4.e-5
+# metrics_key: validation_homo_lumo_gap_L1Loss_mean
+# metric_criteria: increasing
+
+# learning rate scheduler
+warmup_epochs: 15%
+lr_scheduler_name: CosineAnnealingLR
+
+# lr_scheduler_name: ReduceLROnPlateau
+# lr_scheduler_patience: 20
+# lr_scheduler_factor: 0.75
+# lr_scheduler_min_lr: 1.e-7
+
+# early_stopping_lower_bounds:
+#   LR: 1.e-6
+
+early_stopping_patiences:
+  validation_loss: 10
+
+###################
+default_dtype: float32
+append: true # append (bool): if True, append the old model files and append the same logfile
+debug: false
+
+# - cutoffs - #
+# avg_num_neighbors: 50.639081131
+
+# - radial basis - #
+edge_radial_attrs_basis: geqtrain.nn.BesselBasisVec
+TanhCutoff_n: 6
+
+# - symmetry - #
+parity: o3_full
+
+# --- interaction layers --- #
+gnn_layers: 2 # this includes the final interaction block
+num_layers: 2 # per interaction block
+env_embed_multiplicity: 32
+
+two_body_latent: geqtrain.nn.ScalarMLPFunction
+two_body_latent_mlp_latent_dimensions: [128, 256, 512]
+two_body_latent_mlp_nonlinearity: swiglu
+two_body_latent_has_bias: true
+two_body_latent_gain: 1.55
+
+latent: geqtrain.nn.ScalarMLPFunction
+latent_mlp_latent_dimensions: [256, 256, 256]
+latent_mlp_nonlinearity: swiglu
+latent_has_bias: true
+latent_gain: 1.55
+
+env_embed: geqtrain.nn.ScalarMLPFunction
+env_embed_mlp_latent_dimensions: [256, 256, 256]
+env_embed_mlp_nonlinearity: swiglu
+env_embed_has_bias: true
+env_embed_gain: 1.55
+
+# --- update attrs --- #
+update_mlp_latent_dimensions: [256, 256, 256]
+update_mlp_nonlinearity: swiglu
+update_has_bias: true
+update_wd: true
+update_gain: 1.55
+
+update_emb_mlp_latent_dimensions: [256, 256, 256]
+update_emb_mlp_nonlinearity: swiglu
+update_emb_has_bias: true
+update_emb_wd: true
+update_emb_gain: 1.55
+
+update_0_mlp_latent_dimensions: [256, 256, 256]
+update_0_mlp_nonlinearity: swiglu
+update_0_has_bias: true
+update_0_wd: true
+update_0_gain: 1.55
+
+last_interaction_layer_output_ls: [0, 1]
+
+# logging
+verbose: info
+wandb: false
+wandb_watch: true # - log gradients and/or parameters of the model - #
+code_folder_name: source # - use if you run geqtrain from a different repo, to save source code of your repo - #
+wandb_watch_kwargs:
+    # log: 'gradients' # 'gradients', 'parameters', 'all', comment whole wandb_watch_kwargs to do not log any of previous
+    log_freq: 1000  # upload log every N batches
+
+# optimizer
+optimizer_name: AdamW
+optimizer_params:
+  amsgrad: false
+  betas: !!python/tuple
+  - 0.9
+  - 0.999
+  eps: 1.0e-08 # do not change this
+  weight_decay: 0
+  fused: true
+
+# Configure maximum batch sizes to avoid GPU memory errors. These parameters have to be configured according to your GPU RAM
+skip_chunking: true
+batch_max_atoms: 1000000             # Limit the maximum number of nodes of a graph to be loaded on memory in a single batch
+
+dloader_timeout: 0
+# dataloader_num_workers: 2
+dloader_prefetch_factor: 4
+
+train_val_split: random
+shuffle: true
+report_init_validation: false
