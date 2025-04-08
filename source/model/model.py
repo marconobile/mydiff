@@ -20,22 +20,24 @@ from geqtrain.nn import (
     OneHotAtomEncoding
 )
 
+from source.nn.atomNum21hot import OneHotAtomEncodingFromAtomNum
+
 def appendNGNNLayers(config):
 
     N:int = config.get('gnn_layers', 2)
     modules = {}
     logging.info(f"--- Number of GNN layers {N}")
 
-    # attention on embeddings
-    modules.update({
-        "update_emb": (ReadoutModule, dict(
-            field=AtomicDataDict.NODE_ATTRS_KEY,
-            out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
-            out_irreps=None, # outs tensor of same o3.irreps of out_field
-            resnet=True,
-            num_heads=8, # this number must be a 0 reminder of the sum of catted nn.embedded features (node and edges)
-        ))
-    })
+    # # attention on embeddings
+    # modules.update({
+    #     "update_emb": (ReadoutModule, dict(
+    #         field=AtomicDataDict.NODE_ATTRS_KEY,
+    #         out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
+    #         out_irreps=None, # outs tensor of same o3.irreps of out_field
+    #         resnet=True,
+    #         num_heads=8, # this number must be a 0 reminder of the sum of catted nn.embedded features (node and edges)
+    #     ))
+    # })
 
     for layer_idx in range(N-1):
         layer_name:str = 'local_interaction' if layer_idx == 0 else f"interaction_{layer_idx}"
@@ -59,6 +61,7 @@ def appendNGNNLayers(config):
                 out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
                 out_irreps=None, # outs tensor of same o3.irreps of out_field
                 resnet=True,
+                scalar_attnt=False,
             )),
         })
 
@@ -80,6 +83,7 @@ def appendNGNNLayers(config):
             out_field=AtomicDataDict.NODE_FEATURES_KEY, # scalars only
             out_irreps=None, # outs tensor of same o3.irreps of out_field
             resnet=True,
+            scalar_attnt=False,
         )),
         "global_node_pooling": (NodewiseReduce, dict(
             field=AtomicDataDict.NODE_FEATURES_KEY,
@@ -95,7 +99,7 @@ def moreGNNLayers(config:Config):
     update_config(config)
 
     if 'node_attributes' in config:
-        node_embedder = (OneHotAtomEncoding, dict(
+        node_embedder = (OneHotAtomEncodingFromAtomNum, dict(
             out_field=AtomicDataDict.NODE_ATTRS_KEY,
             attributes=config.get('node_attributes'),
         ))

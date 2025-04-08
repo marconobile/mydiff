@@ -28,7 +28,7 @@ l_max: 2
 #  - irreps: irreps outputted by NN
 #]
 heads:
-    - [noise_target, 14x0e] # N = num of atom types + 3 for coords
+    - [noise_target, 3x0e] # they should be 14 N = num of atom types + 3 for coords
 
 head_wds: 0.0
 
