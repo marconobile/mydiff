@@ -2,7 +2,6 @@ import os
 from types import SimpleNamespace
 from typing import List, Union
 import numpy as np
-from numpy import NpzFile
 
 
 def ls(dir):
@@ -13,7 +12,7 @@ def ls(dir):
         # Filter non-hidden files using entry.is_file() and entry.name
         return [os.path.join(dir, entry.name) for entry in entries if entry.is_file() and not entry.name.startswith('.')]
 
-def get_field_from_npzs(path:str, field:Union[str, List]='*') -> List[NpzFile]:
+def get_field_from_npzs(path:str, field:Union[str, List]='*'):
   '''
   example usage:
   l = get_field_from_npzs(p)

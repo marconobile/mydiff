@@ -21,6 +21,8 @@ from geqtrain.nn import (
 )
 
 from source.nn.atomNum21hot import OneHotAtomEncodingFromAtomNum
+from source.diffusion_utils.scheduler import ForwardDiffusionModule
+
 
 def appendNGNNLayers(config):
 
@@ -102,6 +104,7 @@ def moreGNNLayers(config:Config):
         node_embedder = (OneHotAtomEncodingFromAtomNum, dict(
             out_field=AtomicDataDict.NODE_ATTRS_KEY,
             attributes=config.get('node_attributes'),
+            scaling_factor=config.get('one_hot_scaling_factor', None),
         ))
     else:
         raise ValueError('Missing node_attributes in yaml')
@@ -118,10 +121,14 @@ def moreGNNLayers(config:Config):
     layers = {
         # -- Encode -- #
         "node_attrs":         node_embedder,
-        "edge_radial_attrs":  BasisEdgeRadialAttrs,
-        "edge_angular_attrs": SphericalHarmonicEdgeAngularAttrs,
         "graph_attrs":        EmbeddingGraphAttrs,
     }
+
+    layers.update({
+        "diffusion_module":   ForwardDiffusionModule,
+        "edge_radial_attrs":  BasisEdgeRadialAttrs, # need to be computed after noise addition
+        "edge_angular_attrs": SphericalHarmonicEdgeAngularAttrs, # need to be computed after noise addition
+    })
 
     if edge_embedder != None:
         layers.update({"edge_attrs": edge_embedder})

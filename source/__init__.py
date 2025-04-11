@@ -1,5 +1,6 @@
 from . import (
     transforms,
     model,
-    utils
+    utils,
+    diffusion_utils,
 )

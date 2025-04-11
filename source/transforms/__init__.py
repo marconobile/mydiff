@@ -1,5 +1,5 @@
-from .diffusion_transf import coord_noise
+from .diffusion_transf import center_pos_transf
 
 __all__ = [
-    coord_noise,
+    center_pos_transf,
 ]

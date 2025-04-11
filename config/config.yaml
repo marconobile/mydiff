@@ -9,9 +9,12 @@ mixed_precision: false
 # use_grokfast: true
 # use_ema: true
 
+one_hot_scaling_factor: .25
+
 model_builders:
     - source.model.moreGNNLayers #: freeze #tune
     - Heads
+    # - source.model.wrapper.DiffusionWrapper
 
 # bessel basis
 r_max: 15.0
@@ -28,53 +31,54 @@ l_max: 2
 #  - irreps: irreps outputted by NN
 #]
 heads:
-    - [noise_target, 3x0e] # they should be 14 N = num of atom types + 3 for coords
+    - [noise, 25x0e] # they should be 14 N = num of atom types + 3 for coords
 
 head_wds: 0.0
 
-head_noise_target_mlp_latent_dimensions: [32]
-head_noise_target_mlp_nonlinearity: swiglu
-head_noise_target_has_bias: true
-head_noise_target_gain: 1.55
+head_noise_mlp_latent_dimensions: [32]
+head_noise_mlp_nonlinearity: swiglu
+head_noise_has_bias: true
+head_noise_gain: 1.55
 
 # --- D A T A S E T --- #
 dataset_list:
   - dataset: npz
     dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch
     # inmemory: false
-    transforms: [source.transforms.diffusion_transf.coord_noise]
+    transforms: [source.transforms.diffusion_transf.center_pos_transf]
     key_mapping:
-      coords: pos # blue is the npz kword, red is the kword in code
+      coords: pos # key=key in npz: value: key in AtomicData
       atomic_num: node_types
 
 validation_dataset_list:
   - validation_dataset: npz
     validation_dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch # val10k
     # inmemory: false
-    transforms: [source.transforms.diffusion_transf.coord_noise]
+    transforms: [source.transforms.diffusion_transf.center_pos_transf]
     key_mapping:
       coords: pos
       atomic_num: node_types
 
 # - register fields - #
-node_fields:
-  - node_types # could be not needed
+# node_fields:
+#   - node_types # could be not needed registered by def
 
 # Field Properties
-num_types: 11 # embedding_dimensionality of node_types, it must be present even if node_types not used in fwd | in one-hot case it is num_classes
+num_types: 22 # embedding_dimensionality of node_types, it must be present even if node_types not used in fwd | in one-hot case it is num_classes
 node_attributes: # if fixed (N,) if not fixed (1,N); for coords: same with an additional dim at -1 always equal to 3
   node_types: # this kword must match the red kword in key_mapping
     fixed: true # if equal for each frame, if so they must not have the batch dim in the npz
 
+
 # --- L O S S --- #
 loss_coeffs:
-    - noise_target:
-      - MSELoss
+    - noise:
+        - source.diffusion_utils.scheduler.DiffusionLoss
 
 # --- M E T R I C S --- #
 metrics_components:
-    - noise_target:
-      - MSELoss
+    - noise:
+        - source.diffusion_utils.scheduler.DiffusionLoss
 
 # --- T R A I N I N G --- #
 dataset_num_workers: 1
