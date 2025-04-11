@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from typing import Optional, Union, List
+from e3nn import o3
 
 
 from source.diffusion_utils.utils import (
@@ -120,11 +121,26 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         self.gamma = PredefinedNoiseSchedule() # naming inherited from ref for code compatibility
         self.T = self.gamma.timesteps
         self.ref_data_keys = ['noise_target']
+        self.t_embedding_dim = 64 # 64 sin and 64 cos
+
+        out_irrep = o3.Irreps([(mul+2*self.t_embedding_dim, ir) for mul, ir in irreps_in[AtomicDataDict.NODE_ATTRS_KEY]])
 
         self._init_irreps(
             irreps_in=irreps_in,
-            irreps_out=irreps_in,
+            irreps_out={
+                AtomicDataDict.NODE_ATTRS_KEY:out_irrep,
+                AtomicDataDict.NODE_FEATURES_KEY:out_irrep
+                },
         )
+
+    def get_time_embedding(self, timestep:int):
+        # cast int to vector
+        # same as transformer for positional embedding
+        # (self.t_embedding_dim,)
+        freqs = torch.pow(10000, -torch.arange(0, self.t_embedding_dim, dtype=torch.float32)/self.t_embedding_dim)
+        # (1, self.t_embedding_dim)
+        x = timestep* freqs
+        return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
 
     def forward(self, data:AtomicDataDict):
         bs = len(torch.unique(data['batch']))
@@ -138,6 +154,8 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=_device).float() # T+1 since exclusive, shape: (bs, 1)
         # this is required in loss
         data['t_is_zero_mask'] = (t_int[data['batch']] == 0).float()  # used to mask L0 in loss calc (i.e. optimize log p(x | z0) iff t==0)
+        t_embedding = self.get_time_embedding(t_int[data['batch']])
+
 
         # Normalize t to [0, 1].
         t = t_int / self.T
@@ -173,11 +191,13 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
 
         # Update data dictionary with diffused values
         data['pos'] = z_t_pos
-        data['AtomicDataDict.NODE_ATTRS_KEY'] = z_t_h
-        data['AtomicDataDict.NODE_FEATURES_KEY'] = z_t_h
-        assert x.shape[0] == z_t_h.shape[0]
         assert h.shape[-1] == z_t_h.shape[-1]
         assert x.shape[-1] == z_t_pos.shape[-1] == 3
+        assert x.shape[0] == z_t_h.shape[0]
+
+        z_t_h_with_t_emb = torch.cat([z_t_h, t_embedding], dim=-1)
+        data[AtomicDataDict.NODE_ATTRS_KEY] = z_t_h_with_t_emb
+        data[AtomicDataDict.NODE_FEATURES_KEY] = z_t_h_with_t_emb
 
         return data
 
@@ -295,3 +315,42 @@ class DiffusionLoss:
 
 
 
+
+
+
+
+###########
+# @torch.no_grad()
+#     def sample(self, n_samples, n_nodes, node_mask, edge_mask, context, fix_noise=False):
+#         """
+#         Draw samples from the generative model.
+#         """
+#         if fix_noise:
+#             # Noise is broadcasted over the batch axis, useful for visualizations.
+#             z = self.sample_combined_position_feature_noise(1, n_nodes, node_mask) # z_T
+#         else:
+#             z = self.sample_combined_position_feature_noise(n_samples, n_nodes, node_mask) # z_T
+
+#         diffusion_utils.assert_mean_zero_with_mask(z[:, :, :self.n_dims], node_mask)
+
+#         # Iteratively sample p(z_s | z_t) for t = 1, ..., T, with s = t - 1.
+#         for s in reversed(range(0, self.T)):
+#             s_array = torch.full((n_samples, 1), fill_value=s, device=z.device)
+#             t_array = s_array + 1
+#             s_array = s_array / self.T
+#             t_array = t_array / self.T
+
+#             z = self.sample_p_zs_given_zt(s_array, t_array, z, node_mask, edge_mask, context, fix_noise=fix_noise)
+
+#         # Finally sample p(x, h | z_0).
+#         x, h = self.sample_p_xh_given_z0(z, node_mask, edge_mask, context, fix_noise=fix_noise)
+
+#         diffusion_utils.assert_mean_zero_with_mask(x, node_mask)
+
+#         max_cog = torch.sum(x, dim=1, keepdim=True).abs().max().item()
+#         if max_cog > 5e-2:
+#             print(f'Warning cog drift with error {max_cog:.3f}. Projecting '
+#                   f'the positions down.')
+#             x = diffusion_utils.remove_mean_with_mask(x, node_mask)
+
+#         return x, h
