@@ -24,6 +24,8 @@ num_basis: 16
 latent_dim: 256
 l_max: 2
 
+# end_of_batch_callbacks: [source.diffusion_utils.sample_with_diffusion.generate_single_mol]
+
 # --- HEADS --- #
 #[
 #  - field: optional, default=AtomicDataDict.NODE_FEATURES_KEY; key used to index data obj, the value is input to head;
@@ -31,7 +33,7 @@ l_max: 2
 #  - irreps: irreps outputted by NN
 #]
 heads:
-    - [noise, 25x0e] # they should be 14 N = num of atom types + 3 for coords
+    - [noise, 25x0e] # they should be N = num of atom types + 3 for coords
 
 head_wds: 0.0
 
