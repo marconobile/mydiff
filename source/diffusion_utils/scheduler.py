@@ -146,7 +146,7 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         # cast int to vector
         # same as transformer for positional embedding
         # (self.t_embedding_dim,)
-        freqs = torch.pow(10000, -torch.arange(0, self.t_embedding_dim, dtype=torch.float32)/self.t_embedding_dim)
+        freqs = torch.pow(10000, -torch.arange(0, self.t_embedding_dim, dtype=torch.float32, device=timestep.device)/self.t_embedding_dim)
         # (1, self.t_embedding_dim)
         x = timestep* freqs
         return torch.cat([torch.cos(x), torch.sin(x)], dim=-1)
@@ -169,7 +169,6 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         z_h = sample_noise_from_N_0_1(size=h_shape, device=device)
         return torch.cat([z_x, z_h], dim=-1)
 
-
     def forward(self, data:AtomicDataDict):
 
         if 't_inference' in data:
@@ -185,7 +184,25 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
 
         # Sample timestep t for batch
         # T+1 since exclusive, shape: (bs, 1)
-        t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=_device).float()
+        # t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=_device).float()
+
+        ################## for single mol learning
+        if not hasattr(self, 't_counter'):
+            self.t_counter = 0
+
+        # Get next 100 timesteps in cyclic manner
+        start_idx = self.t_counter
+        end_idx = start_idx + 100
+        if end_idx > self.T:
+            end_idx = self.T
+
+        t_int = torch.arange(start_idx, end_idx, device=_device).float().unsqueeze(-1)
+
+        # Update counter for next batch
+        self.t_counter += 100
+        if self.t_counter >= self.T:
+            self.t_counter = 0
+        ################## for single mol learning
 
         # this is required in loss
         data['t_is_zero_mask'] = (t_int[data['batch']] == 0).float()  # used to mask L0 in loss calc (i.e. optimize log p(x | z0) iff t==0)
@@ -234,7 +251,6 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
 
         return data
 
-
     def forward_sampling(self, data:AtomicDataDict):
         # todo refactor to aggregate code from forward
         h = data[AtomicDataDict.NODE_ATTRS_KEY] # just 1hot enc of atom types for now; make this optional
@@ -244,7 +260,6 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         data[AtomicDataDict.NODE_ATTRS_KEY] = z_t_h_with_t_emb
         data[AtomicDataDict.NODE_FEATURES_KEY] = z_t_h_with_t_emb
         return data
-
 
     def sigma_and_alpha_t_given_s(self, gamma_t: torch.Tensor, gamma_s: torch.Tensor):
         """
@@ -362,7 +377,7 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         xh = self.sample_normal(mu=mu_x, sigma=sigma_x, fix_noise=fix_noise)
 
         # ok so in the end is argmax for 1hot and torch.round for integers, it's just in the loss that u cannot cross entropy and mse
-        x, h_cat = xh[:, :, :3], xh[:, :, 3:]
+        x, h_cat = xh[..., :3], xh[..., 3:]
         h_cat = 4*h_cat # unscale
 
         # h_cat = F.one_hot(torch.argmax(h_cat, dim=2), 22)
