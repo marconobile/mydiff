@@ -1,51 +1,46 @@
 root: /storage_common/nobilm/diffusion
-run_name: difftest
+run_name: try_replicating_log_pos_ddpm_50_smaller_net_higher_tmax_20
 wandb_project: diffusion
 seed: 7
 dataset_seed: 15
-device: cpu #cuda:0
+device: cuda:3
 mixed_precision: false
 
-# use_grokfast: true
+use_grokfast: true
 # use_ema: true
+strict_irreps: False
 
-one_hot_scaling_factor: .25
+one_hot_scaling_factor: 1 #.25
 
 model_builders:
-    - source.model.moreGNNLayers #: freeze #tune
+    - source.model.moreGNNLayers
     - Heads
-    # - source.model.wrapper.DiffusionWrapper
 
 # bessel basis
 r_max: 15.0
 num_basis: 16
 
 # hyperparams
-latent_dim: 256
-l_max: 2
+latent_dim: 64
+l_max: 1
 
-# end_of_batch_callbacks: [source.diffusion_utils.sample_with_diffusion.generate_single_mol]
+end_of_epoch_callbacks: [source.diffusion_utils.sample_with_diffusion.generate_single_mol]
 
 # --- HEADS --- #
-#[
-#  - field: optional, default=AtomicDataDict.NODE_FEATURES_KEY; key used to index data obj, the value is input to head;
-#  - out_field: to be used from data to compute loss; you will find head_{out_field}
-#  - irreps: irreps outputted by NN
-#]
 heads:
-    - [noise, 25x0e] # they should be N = num of atom types + 3 for coords
+    noise:
+        out_field: noise
+        out_irreps: 3x0e # 1x1o could be better
 
 head_wds: 0.0
-
-head_noise_mlp_latent_dimensions: [32]
-head_noise_mlp_nonlinearity: swiglu
-head_noise_has_bias: true
-head_noise_gain: 1.55
+noise_mlp_latent_dimensions: [64, 32]
+noise_mlp_nonlinearity: silu
+noise_has_bias: true
 
 # --- D A T A S E T --- #
 dataset_list:
   - dataset: npz
-    dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch
+    dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_mol/single_mol_1000_times
     # inmemory: false
     transforms: [source.transforms.diffusion_transf.center_pos_transf]
     key_mapping:
@@ -54,7 +49,7 @@ dataset_list:
 
 validation_dataset_list:
   - validation_dataset: npz
-    validation_dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_batch # val10k
+    validation_dataset_input: /storage_common/nobilm/pretrain_paper/PCQM4Mv2Dataset/single_mol/single_mol_source
     # inmemory: false
     transforms: [source.transforms.diffusion_transf.center_pos_transf]
     key_mapping:
@@ -75,50 +70,48 @@ node_attributes: # if fixed (N,) if not fixed (1,N); for coords: same with an ad
 # --- L O S S --- #
 loss_coeffs:
     - noise:
-        - source.diffusion_utils.scheduler.DiffusionLoss
+      - MSELoss
+        # - source.diffusion_utils.scheduler.DiffusionLoss
 
 # --- M E T R I C S --- #
 metrics_components:
     - noise:
-        - source.diffusion_utils.scheduler.DiffusionLoss
+      - MSELoss
+        # - source.diffusion_utils.scheduler.DiffusionLoss
 
 # --- T R A I N I N G --- #
-dataset_num_workers: 1
+dataset_num_workers: 40
 
 accumulation_steps: 1
-batch_size: 32
-train_dloader_n_workers: 32
+batch_size: 20
+train_dloader_n_workers: 10
 
 validation_batch_size: 256
-val_dloader_n_workers: 4
+val_dloader_n_workers: 1
 
-max_epochs: 500
-learning_rate: 4.e-5
-# metrics_key: validation_homo_lumo_gap_L1Loss_mean
-# metric_criteria: increasing
+max_epochs: 20000
+learning_rate: 3.e-4
 
 # learning rate scheduler
-warmup_epochs: 15%
+warmup_epochs: 1%
 lr_scheduler_name: CosineAnnealingLR
-
-# lr_scheduler_name: ReduceLROnPlateau
-# lr_scheduler_patience: 20
-# lr_scheduler_factor: 0.75
-# lr_scheduler_min_lr: 1.e-7
-
-# early_stopping_lower_bounds:
-#   LR: 1.e-6
 
 early_stopping_patiences:
   validation_loss: 10
+
+
+
+
+
+
+
+
+
 
 ###################
 default_dtype: float32
 append: true # append (bool): if True, append the old model files and append the same logfile
 debug: false
-
-# - cutoffs - #
-# avg_num_neighbors: 50.639081131
 
 # - radial basis - #
 edge_radial_attrs_basis: geqtrain.nn.BesselBasisVec
@@ -133,47 +126,41 @@ num_layers: 2 # per interaction block
 env_embed_multiplicity: 32
 
 two_body_latent: geqtrain.nn.ScalarMLPFunction
-two_body_latent_mlp_latent_dimensions: [128, 256, 512]
-two_body_latent_mlp_nonlinearity: swiglu
+two_body_latent_mlp_latent_dimensions: [64]
+two_body_latent_mlp_nonlinearity: silu
 two_body_latent_has_bias: true
-two_body_latent_gain: 1.55
 
 latent: geqtrain.nn.ScalarMLPFunction
-latent_mlp_latent_dimensions: [256, 256, 256]
-latent_mlp_nonlinearity: swiglu
+latent_mlp_latent_dimensions: [64]
+latent_mlp_nonlinearity: silu
 latent_has_bias: true
-latent_gain: 1.55
 
 env_embed: geqtrain.nn.ScalarMLPFunction
-env_embed_mlp_latent_dimensions: [256, 256, 256]
-env_embed_mlp_nonlinearity: swiglu
+env_embed_mlp_latent_dimensions: [64]
+env_embed_mlp_nonlinearity: silu
 env_embed_has_bias: true
-env_embed_gain: 1.55
 
 # --- update attrs --- #
-update_mlp_latent_dimensions: [256, 256, 256]
-update_mlp_nonlinearity: swiglu
+update_mlp_latent_dimensions: [64]
+update_mlp_nonlinearity: silu
 update_has_bias: true
 update_wd: true
-update_gain: 1.55
 
-update_emb_mlp_latent_dimensions: [256, 256, 256]
-update_emb_mlp_nonlinearity: swiglu
+update_emb_mlp_latent_dimensions: [64]
+update_emb_mlp_nonlinearity: silu
 update_emb_has_bias: true
 update_emb_wd: true
-update_emb_gain: 1.55
 
-update_0_mlp_latent_dimensions: [256, 256, 256]
-update_0_mlp_nonlinearity: swiglu
+update_0_mlp_latent_dimensions: [64]
+update_0_mlp_nonlinearity: silu
 update_0_has_bias: true
 update_0_wd: true
-update_0_gain: 1.55
 
 last_interaction_layer_output_ls: [0, 1]
 
 # logging
 verbose: info
-wandb: false
+wandb: true
 wandb_watch: true # - log gradients and/or parameters of the model - #
 code_folder_name: source # - use if you run geqtrain from a different repo, to save source code of your repo - #
 wandb_watch_kwargs:
@@ -196,9 +183,14 @@ skip_chunking: true
 batch_max_atoms: 1000000             # Limit the maximum number of nodes of a graph to be loaded on memory in a single batch
 
 dloader_timeout: 0
-# dataloader_num_workers: 2
 dloader_prefetch_factor: 4
 
 train_val_split: random
 shuffle: true
 report_init_validation: false
+
+
+mlp_latent_dimensions: [64]
+mlp_nonlinearity: silu
+has_bias: true
+wd: true
