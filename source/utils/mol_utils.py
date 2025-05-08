@@ -149,3 +149,42 @@ def coords_group_period_to_mol(coords: torch.Tensor, group: torch.Tensor, period
     # Print final number of atoms for verification
     print(f"Final number of atoms: {mol.GetNumAtoms()}")
     return mol
+
+
+
+def visualize_3d_mols(mols,
+    drawing_style: str = 'stick',
+    titles: list[str] = None,
+    width:int=1500,
+    height:int=400,
+    grid:tuple=None,
+  ):
+    import py3Dmol
+    from rdkit import Chem as rdChem
+    if not grid: grid = (1, len(mols))
+    drawing_style_options = [
+        "line",   # Wire Model
+        "cross",  # Cross Model
+        "stick",  # Bar Model
+        "sphere", # Space Filling Model
+        "cartoon",# Display secondary structure in manga
+    ]
+    assert drawing_style in drawing_style_options, f"Invalid drawing style. Choose from {drawing_style_options}"
+    if not isinstance(mols, list): mols = [mols]
+    if titles is None: titles = ["" for _ in mols]  # Default empty titles if none provided
+    assert len(titles) == len(mols), "Length of titles must match the number of molecules."
+
+    p = py3Dmol.view(width=width, height=height, viewergrid=grid)
+    nrows = grid[0]
+    ncols = grid[1]
+
+
+    for row_idx in range(nrows):
+        for col_idx in range(ncols):
+            mol_idx = row_idx * ncols + col_idx
+            p.removeAllModels(viewer=(row_idx, col_idx))
+            p.addModel(rdChem.MolToMolBlock(mols[mol_idx], confId=0), 'sdf', viewer=(row_idx, col_idx))
+            p.setStyle({drawing_style: {}},  viewer=(row_idx, col_idx))
+            if titles[mol_idx]: p.addLabel(titles[mol_idx],  viewer=(row_idx, col_idx)) # , {'position': {'x': 0, 'y': 1.5, 'z': 0}, 'backgroundColor': 'white', 'fontSize': 16}
+    p.zoomTo()
+    p.show()
