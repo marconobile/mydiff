@@ -118,6 +118,23 @@ class PredefinedNoiseSchedule(torch.nn.Module):
         return self.gamma[t_int]
 
 
+class DDPMDiffusionScheduler(object):
+    def __init__(self, T=1000, beta_minmax=[1e-4, 2e-2]):
+        self.T = T
+
+        # define linear variance schedule(betas)
+        beta_1, beta_T = beta_minmax
+        betas = torch.linspace(start=beta_1, end=beta_T, steps=T) # follows DDPM paper
+        self.sqrt_betas = torch.sqrt(betas)
+
+        # define alpha for forward diffusion kernel
+        self.alphas = 1 - betas
+        self.sqrt_alphas = torch.sqrt(self.alphas)
+        alpha_bars = torch.cumprod(self.alphas, dim=0)
+        self.sqrt_one_minus_alpha_bars = torch.sqrt(1-alpha_bars)
+        self.sqrt_alpha_bars = torch.sqrt(alpha_bars)
+
+
 class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
     def __init__(
         self,
@@ -127,8 +144,8 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         super().__init__()
         self.out_field = out_field
 
-        self.gamma = PredefinedNoiseSchedule() # naming inherited from ref for code compatibility
-        self.T = self.gamma.timesteps
+        self.T = 20 #self.gamma.timesteps
+        self.gamma = DDPMDiffusionScheduler(T=self.T) #PredefinedNoiseSchedule() # naming inherited from ref for code compatibility
         self.ref_data_keys = ['noise_target']
         self.t_embedding_dim = 64 # 64 sin and 64 cos
 
@@ -169,40 +186,87 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         z_h = sample_noise_from_N_0_1(size=h_shape, device=device)
         return torch.cat([z_x, z_h], dim=-1)
 
+    def cyclical_range_T(self, bs, device):
+        # for single mol learning
+        if not hasattr(self, 't_counter'):
+            self.t_counter = 0
+
+        offset = bs # this should be equal to bs
+
+        # Get next offset timesteps in cyclic manner
+        start_idx = self.t_counter
+        end_idx = start_idx + offset
+
+        if end_idx > self.T:
+            end_idx = self.T
+
+        t_int = torch.arange(start_idx, end_idx, device=device).float().unsqueeze(-1)
+
+        # Update counter for next batch
+        self.t_counter += offset
+        if self.t_counter >= self.T:
+            self.t_counter = 0
+
+        return t_int
+
     def forward(self, data:AtomicDataDict):
+        '''DDPM forward'''
+
+        with torch.no_grad():
+            if 't_inference' in data:
+                # can't use the normal forward since scheduler params are different for sampling transitions
+                return self.DDPMforward_sampling(data)
+
+            x = data['pos'] # option: drop centering transform and center data['pos'] here, considering batch
+            _device = data['batch'].device
+            bs = len(torch.unique(data['batch']))
+
+            # !the below should be replaced with randomized t
+            # t_int = self.cyclical_range_T(bs, _device) # shape: (bs, 1) where last dim is each t from startT to endT wrt t_counter
+            # t_int = torch.randint(0, self.T, size=(bs, 1), device=_device).float()
+            t_int = torch.arange(0, self.T, device=_device).unsqueeze(-1).float()
+            t_int = t_int.to(int)
+
+            t_embedding = self.get_time_embedding(t_int) # "broadcast" the mol-wise t to each atom
+            t_embedding = t_embedding[data['batch']] # batch-ordered embeddings of t
+
+            z_x = center_pos((sample_noise_from_N_0_1(size=x.shape, device=_device))) # noise to be injected
+
+            self.gamma.sqrt_alpha_bars = self.gamma.sqrt_alpha_bars.to(_device)
+            sqrt_alpha_bar = self.gamma.sqrt_alpha_bars[t_int]
+            sqrt_alpha_bar = sqrt_alpha_bar[data['batch']]
+
+            self.gamma.sqrt_one_minus_alpha_bars = self.gamma.sqrt_one_minus_alpha_bars.to(_device)
+            sqrt_one_minus_alpha_bar = self.gamma.sqrt_one_minus_alpha_bars[t_int]
+            sqrt_one_minus_alpha_bar = sqrt_one_minus_alpha_bar[data['batch']]
+
+            data[AtomicDataDict.POSITIONS_KEY] = sqrt_alpha_bar * x  + sqrt_one_minus_alpha_bar * z_x
+            data['noise_target'] = z_x
+
+            h = data[AtomicDataDict.NODE_ATTRS_KEY]
+            data[AtomicDataDict.NODE_ATTRS_KEY] = torch.cat([h, t_embedding], dim=-1) # the most trivial t conditioning via cat
+
+        return data
+
+    def OGforward(self, data:AtomicDataDict):
 
         if 't_inference' in data:
             # can't use the normal forward since scheduler params are different for sampling transitions
             return self.forward_sampling(data)
 
-        bs = len(torch.unique(data['batch']))
-        _device = data['batch'].device
-
         x = data['pos'] # option: drop centering transform and center data['pos'] here considering batch
         h = data[AtomicDataDict.NODE_ATTRS_KEY] # just 1hot enc of atom types for now; make this optional
         assert x.shape[0] == h.shape[0]
+        _device = data['batch'].device
+        bs = len(torch.unique(data['batch']))
 
         # Sample timestep t for batch
-        # T+1 since exclusive, shape: (bs, 1)
-        # t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=_device).float()
-
-        ################## for single mol learning
-        if not hasattr(self, 't_counter'):
-            self.t_counter = 0
-
-        # Get next 100 timesteps in cyclic manner
-        start_idx = self.t_counter
-        end_idx = start_idx + 100
-        if end_idx > self.T:
-            end_idx = self.T
-
-        t_int = torch.arange(start_idx, end_idx, device=_device).float().unsqueeze(-1)
-
-        # Update counter for next batch
-        self.t_counter += 100
-        if self.t_counter >= self.T:
-            self.t_counter = 0
-        ################## for single mol learning
+        debug = True
+        if debug:
+            t_int = self.cyclical_range_T(_device)
+        else:
+            # T+1 since exclusive, shape: (bs, 1)
+            t_int = torch.randint(0, self.T + 1, size=(bs, 1), device=_device).float()
 
         # this is required in loss
         data['t_is_zero_mask'] = (t_int[data['batch']] == 0).float()  # used to mask L0 in loss calc (i.e. optimize log p(x | z0) iff t==0)
@@ -251,7 +315,17 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
 
         return data
 
-    def forward_sampling(self, data:AtomicDataDict):
+    def DDPMforward_sampling(self, data:AtomicDataDict):
+        # refactor via _forward as in geqtrain wrt ddpm ddim etc
+        t_int = data['t_inference']
+        t_embedding = self.get_time_embedding(t_int).unsqueeze(0) # "broadcast" the mol-wise t to each atom
+        t_embedding = t_embedding[data['batch']].squeeze() # batch-ordered embeddings of t
+
+        h = data[AtomicDataDict.NODE_ATTRS_KEY]
+        data[AtomicDataDict.NODE_ATTRS_KEY] = torch.cat([h, t_embedding], dim=-1) # the most trivial t conditioning via cat
+        return data
+
+    def OGforward_sampling(self, data:AtomicDataDict):
         # todo refactor to aggregate code from forward
         h = data[AtomicDataDict.NODE_ATTRS_KEY] # just 1hot enc of atom types for now; make this optional
         t_int = data['t_inference']
