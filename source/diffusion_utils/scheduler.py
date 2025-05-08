@@ -144,7 +144,7 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         super().__init__()
         self.out_field = out_field
 
-        self.T = 20 #self.gamma.timesteps
+        self.T = 50 #self.gamma.timesteps
         self.gamma = DDPMDiffusionScheduler(T=self.T) #PredefinedNoiseSchedule() # naming inherited from ref for code compatibility
         self.ref_data_keys = ['noise_target']
         self.t_embedding_dim = 64 # 64 sin and 64 cos
@@ -187,6 +187,7 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         return torch.cat([z_x, z_h], dim=-1)
 
     def cyclical_range_T(self, bs, device):
+        # TODO: fix bs issue (still present in cyclical_range_T: it outs at last batch a bs-1 tensor of ts so index breaks down with cuda assert)
         # for single mol learning
         if not hasattr(self, 't_counter'):
             self.t_counter = 0
