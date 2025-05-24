@@ -1,4 +1,10 @@
 # Python
+*.yaml
+*.gro
+*.png
+*.pdb
+*.gif
+*.xyz
 *.zip
 __pycache__/
 *.py[cod]

@@ -1,9 +1,18 @@
 import torch
 import math
 from typing import Tuple, Optional
+from torch.nn import functional as F
+
 
 def center_pos(pos: torch.tensor):
     return pos - torch.mean(pos, dim=-2, keepdim=True)
+
+
+def expm1(x: torch.Tensor) -> torch.Tensor:
+    return torch.expm1(x)
+
+def softplus(x: torch.Tensor) -> torch.Tensor:
+    return F.softplus(x)
 
 
 # def inflate_batch_array(array, target):

@@ -1,5 +1,7 @@
 import torch
 from rdkit import Chem
+from rdkit.Chem import rdMolDescriptors, DataStructs, AllChem, rdMolAlign
+
 import mendeleev
 
 def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, removeHs: bool = True) -> Chem.Mol:
@@ -188,3 +190,49 @@ def visualize_3d_mols(mols,
             if titles[mol_idx]: p.addLabel(titles[mol_idx],  viewer=(row_idx, col_idx)) # , {'position': {'x': 0, 'y': 1.5, 'z': 0}, 'backgroundColor': 'white', 'fontSize': 16}
     p.zoomTo()
     p.show()
+
+def align_mols(samples, gt):
+    """
+    Aligns a list of sample molecules to a ground truth molecule using RDKit's alignment tools.
+
+    Parameters:
+    - samples (list of rdkit.Chem.rdchem.Mol): A list of sample molecules to be aligned.
+    - gt (rdkit.Chem.rdchem.Mol): The ground truth molecule to which the samples will be aligned.
+
+    Returns:
+    - sample (rdkit.Chem.rdchem.Mol): The sample molecule that best aligns with the ground truth.
+    - best_idx (int): The index of the best-aligned sample molecule in the input list.
+
+    The function works as follows:
+    1. Removes hydrogens from the ground truth molecule for alignment purposes.
+    2. Iterates through the list of sample molecules, removing hydrogens from each sample.
+    3. Computes the RMSD (Root Mean Square Deviation) and transformation matrix for aligning each sample to the ground truth.
+    4. Tracks the sample with the lowest RMSD and its corresponding transformation matrix.
+    5. Applies the best transformation matrix to the positions of the atoms in the best-aligned sample molecule.
+    6. Returns the best-aligned sample molecule and its index.
+    """
+    gt_ = Chem.RemoveHs(gt)  # Remove hydrogens from the ground truth molecule
+
+    best_rmsd, best_t_mat, best_idx = np.inf, None, 0
+    for i, sample in enumerate(samples):
+        sample_ = Chem.RemoveHs(sample)  # Remove hydrogens from the sample molecule
+        rmsd, t_mat, _ = rdMolAlign.GetBestAlignmentTransform(sample_, gt_, reflect=True, maxIters=100)
+        if rmsd < best_rmsd:  # Update the best alignment if the RMSD is lower
+            best_rmsd = rmsd
+            best_t_mat = t_mat
+            best_idx = i
+
+    # Convert the best transformation matrix to a PyTorch tensor
+    best_t_mat = torch.tensor(best_t_mat, dtype=torch.float)
+    sample = samples[best_idx]  # Retrieve the best-aligned sample molecule
+
+    # Apply the transformation matrix to the atom positions of the best-aligned sample
+    pos = torch.tensor(sample.GetConformer().GetPositions(), dtype=torch.float)
+    pos_ext = torch.ones((len(pos), 4))  # Extend positions to 4D for matrix multiplication
+    pos_ext[:, :3] = pos
+    pos_ext = torch.matmul(pos_ext, best_t_mat.T)  # Apply the transformation
+    pos = pos_ext[:, :3]  # Extract the transformed 3D positions
+    for k in range(len(pos_ext)):
+        sample.GetConformer().SetAtomPosition(k, pos[k].tolist())  # Update atom positions
+
+    return sample, best_idx

@@ -16,7 +16,7 @@ from geqtrain.nn import (
     SphericalHarmonicEdgeAngularAttrs,
     BasisEdgeRadialAttrs,
     EmbeddingGraphAttrs,
-    ReadoutModule,
+    ReadoutModuleWithConditioning,
     OneHotAtomEncoding
 )
 
@@ -32,7 +32,7 @@ def appendNGNNLayers(config):
 
     # # attention on embeddings
     # modules.update({
-    #     "update_emb": (ReadoutModule, dict(
+    #     "update_emb": (ReadoutModuleWithConditioning, dict(
     #         field=AtomicDataDict.NODE_ATTRS_KEY,
     #         out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
     #         out_irreps=None, # outs tensor of same o3.irreps of out_field
@@ -58,8 +58,9 @@ def appendNGNNLayers(config):
                 out_field=AtomicDataDict.NODE_FEATURES_KEY,
                 reduce=config.get("edge_reduce", "sum"),
             )),
-            f"update_{layer_idx}": (ReadoutModule, dict(
+            f"update_{layer_idx}": (ReadoutModuleWithConditioning, dict(
                 field=AtomicDataDict.NODE_FEATURES_KEY,
+                conditioning_field='t_embedded_per_node',
                 out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
                 out_irreps=None, # outs tensor of same o3.irreps of out_field
                 resnet=True,
@@ -80,8 +81,9 @@ def appendNGNNLayers(config):
             field=AtomicDataDict.EDGE_FEATURES_KEY,
             out_field=AtomicDataDict.NODE_FEATURES_KEY,
         )),
-        "update": (ReadoutModule, dict(
+        "update": (ReadoutModuleWithConditioning, dict(
             field=AtomicDataDict.NODE_FEATURES_KEY,
+            conditioning_field='t_embedded_per_node',
             out_field=AtomicDataDict.NODE_FEATURES_KEY, # scalars only
             out_irreps=None, # outs tensor of same o3.irreps of out_field
             resnet=True,
@@ -124,8 +126,14 @@ def moreGNNLayers(config:Config):
         "graph_attrs":        EmbeddingGraphAttrs,
     }
 
+    fdw_diff = (ForwardDiffusionModule, dict(
+        out_field='noise',
+        Tmax=config.get('Tmax', 1000),
+        noise_scheduler = config.get('noise_scheduler'),
+    ))
+
     layers.update({
-        "diffusion_module":   ForwardDiffusionModule,
+        "diffusion_module":   fdw_diff,
         "edge_radial_attrs":  BasisEdgeRadialAttrs, # need to be computed after noise addition
         "edge_angular_attrs": SphericalHarmonicEdgeAngularAttrs, # need to be computed after noise addition
     })
