@@ -60,11 +60,11 @@ def appendNGNNLayers(config):
             )),
             f"update_{layer_idx}": (ReadoutModuleWithConditioning, dict(
                 field=AtomicDataDict.NODE_FEATURES_KEY,
-                conditioning_field='t_embedded_per_node',
+                conditioning_field='conditioning',
                 out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
                 out_irreps=None, # outs tensor of same o3.irreps of out_field
                 resnet=True,
-                scalar_attnt=False,
+                # scalar_attnt=True,
             )),
         })
 
@@ -83,11 +83,11 @@ def appendNGNNLayers(config):
         )),
         "update": (ReadoutModuleWithConditioning, dict(
             field=AtomicDataDict.NODE_FEATURES_KEY,
-            conditioning_field='t_embedded_per_node',
+            conditioning_field='conditioning',
             out_field=AtomicDataDict.NODE_FEATURES_KEY, # scalars only
             out_irreps=None, # outs tensor of same o3.irreps of out_field
             resnet=True,
-            scalar_attnt=False,
+            # scalar_attnt=True,
         )),
         # "global_node_pooling": (NodewiseReduce, dict(
         #     field=AtomicDataDict.NODE_FEATURES_KEY,
@@ -128,8 +128,10 @@ def moreGNNLayers(config:Config):
 
     fdw_diff = (ForwardDiffusionModule, dict(
         out_field='noise',
-        Tmax=config.get('Tmax', 1000),
+        Tmax=config.get('Tmax'),
         noise_scheduler = config.get('noise_scheduler'),
+        labels_conditioned = config.get('labels_conditioned'),
+        number_of_labels = config.get('number_of_labels', -1),
     ))
 
     layers.update({

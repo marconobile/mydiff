@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, DataStructs, AllChem, rdMolAlign
@@ -45,15 +46,15 @@ def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, remo
 
     # Handle hydrogens
     # Print initial number of atoms before hydrogen manipulation
-    print(f"Initial number of atoms: {mol.GetNumAtoms()}")
+    # print(f"Initial number of atoms: {mol.GetNumAtoms()}")
 
     if removeHs:
         # Remove hydrogen atoms and print new count
         mol = Chem.RemoveHs(mol)
-        print(f"Number of atoms after removing hydrogens: {mol.GetNumAtoms()}")
+        # print(f"Number of atoms after removing hydrogens: {mol.GetNumAtoms()}")
 
     # Print final number of atoms for verification
-    print(f"Final number of atoms: {mol.GetNumAtoms()}")
+    # print(f"Final number of atoms: {mol.GetNumAtoms()}")
     return mol
 
 def coords_group_period_to_mol(coords: torch.Tensor, group: torch.Tensor, period: torch.Tensor, removeHs: bool = True) -> Chem.Mol:
@@ -236,3 +237,51 @@ def align_mols(samples, gt):
         sample.GetConformer().SetAtomPosition(k, pos[k].tolist())  # Update atom positions
 
     return sample, best_idx
+
+
+# helper function to visualize conformers
+
+import py3Dmol
+from ipywidgets import interact, fixed, IntSlider
+import ipywidgets
+
+def show_mol(mol, view, grid):
+    mb = Chem.MolToMolBlock(mol)
+    view.removeAllModels(viewer=grid)
+    view.addModel(mb,'sdf', viewer=grid)
+    view.setStyle({'model':0},{'stick': {}}, viewer=grid)
+    view.zoomTo(viewer=grid)
+    return view
+
+def view_single(mol, width=600, height=600):
+    view = py3Dmol.view(width=width, height=height, linked=False, viewergrid=(1,1))
+    show_mol(mol, view, grid=(0, 0))
+    return view
+
+def MolTo3DView(mol, size=(400, 300), style="stick", surface=False, opacity=0.5, confId=0):
+    """Draw molecule in 3D
+
+    Args:
+    ----
+        mol: rdMol, molecule to show
+        size: tuple(int, int), canvas size
+        style: str, type of drawing molecule
+               style can be 'line', 'stick', 'sphere', 'carton'
+        surface, bool, display SAS
+        opacity, float, opacity of surface, range 0.0-1.0
+    Return:
+    ----
+        viewer: py3Dmol.view, a class for constructing embedded 3Dmol.js views in ipython notebooks.
+    """
+    assert style in ('line', 'stick', 'sphere', 'carton')
+    mblock = Chem.MolToMolBlock(mol[confId])
+    viewer = py3Dmol.view(width=size[0], height=size[1])
+    viewer.addModel(mblock, 'mol')
+    viewer.setStyle({style:{}})
+    if surface:
+        viewer.addSurface(py3Dmol.SAS, {'opacity': opacity})
+    viewer.zoomTo()
+    return viewer
+
+def conf_viewer(idx, mol, **kwargs):
+    return MolTo3DView(mol, confId=idx, **kwargs).show()

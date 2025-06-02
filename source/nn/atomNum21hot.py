@@ -44,8 +44,8 @@ class OneHotAtomEncodingFromAtomNum(GraphModuleMixin, torch.nn.Module):
             type_numbers = data.get(AtomicDataDict.NODE_TYPE_KEY).squeeze(-1)
 
             #! bug in my atomic number encoding
-            with torch.no_grad():
-                type_numbers = type_numbers + 1.0
+            # with torch.no_grad():
+            #     type_numbers = type_numbers + 1.0
 
             one_hot = self.atomnum2onehot.to_one_hot(type_numbers).to(device=type_numbers.device, dtype=data[AtomicDataDict.POSITIONS_KEY].dtype) # my guess: [bs, n, NatomsTypes]
             assert torch.all(torch.sum(one_hot, dim=-1) == 1.0)

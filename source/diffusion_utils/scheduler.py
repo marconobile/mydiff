@@ -30,6 +30,8 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         noise_scheduler:str = 'DDPM', # DDPM, polynomial_schedule, cosine_beta_schedule
         t_embedder:str = 'positional', # positional or fourier
         t_embedding_dim:int=256,
+        labels_conditioned:bool=False, # whether to condition on data['labels']
+        number_of_labels:int = -1,
     ):
         super().__init__()
         self.out_field = out_field
@@ -37,23 +39,57 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
         self.T = Tmax
         self.t_embedder = get_t_embedder(t_embedder, t_embedding_dim//2, self.T)
         self.noise_scheduler = NoiseScheduler(scheduler=noise_scheduler, T=self.T) # aka gamma in VDM
+        conditioning_dim = self.t_embedder.out_size
+
+        self.labels_conditioned = labels_conditioned
+        self.number_of_labels = number_of_labels
+        if self.labels_conditioned:
+            assert number_of_labels > 0, "number_of_labels must be set to a positive integer"
+            self.labels_embedder = nn.Embedding(self.number_of_labels, self.t_embedder.out_size)
+            conditioning_dim += self.t_embedder.out_size
+
         self._init_irreps(
             irreps_in=irreps_in,
-            irreps_out={'t_embedded_per_node':o3.Irreps(f'{self.t_embedder.out_size}x0e')}
+            irreps_out={'conditioning':o3.Irreps(f'{conditioning_dim}x0e')}
         )
 
     @torch.no_grad()
     def _inference_forward(self, data:AtomicDataDict):
+        batch_idxs = data['batch']
         # skip the noisification: it happens in the sampling algo since it is different than the fwd diff step
-        t_emb = self.t_embedder(data['t_inference'].unsqueeze(0), data['batch'])
-        data['t_embedded_per_node'] = t_emb.squeeze()
-        assert data['t_embedded_per_node'].shape == (data[AtomicDataDict.POSITIONS_KEY].shape[0], self.t_embedder.out_size)
+        t_emb = self.t_embedder(data['t_inference'].unsqueeze(0), batch_idxs)
+        data['conditioning'] = t_emb.squeeze()
+
+        if self.labels_conditioned:
+            labels_as_ints = self.get_labels_as_ints(data)
+            labels_emb = self.labels_embedder(labels_as_ints)
+            data['conditioning'] = torch.cat([data['conditioning'], labels_emb[batch_idxs].squeeze()], dim=-1)
+
+        assert data['conditioning'].shape == (data[AtomicDataDict.POSITIONS_KEY].shape[0], self.irreps_out['conditioning'].dim)
         return data
 
     def forward(self, data:AtomicDataDict):
         if 't_inference' in data:
             return self._inference_forward(data)
         return self._forward(data)
+
+    def get_labels_as_ints(self, data:AtomicDataDict):
+        # add labels embedding to conditioning
+        assert 'labels' in data, "Labels must be present in data if labels_conditioned is True"
+        labels_as_ints = data.get('labels')
+        bs = len(torch.unique(data['batch']))
+        assert labels_as_ints.shape == (bs,1), "Labels must be a 2D tensor with shape (batch_size, 1), i.e. a graph_fields"
+        assert labels_as_ints.dtype == torch.int64, "Labels must be of type int64"
+        return labels_as_ints
+
+    def cond_uncond_train_step(self, labels_as_ints):
+        '''rand mask labels: 1/2 of the time set to 'NO-CONDITIONING' class,
+        1/2 of the time keep original labels
+        done to train conditioning and unconditioning diff model at the same time'''
+        mask = torch.rand(labels_as_ints.shape, device=labels_as_ints.device) < 0.5 # unif dist on [0,1)
+        labels_as_ints = labels_as_ints.clone() # to avoid modifying original labels
+        labels_as_ints[mask] = self.number_of_labels - 1 # mask 50% with last class: 'NO-CONDITIONING'
+        return labels_as_ints
 
     def _forward(self, data:AtomicDataDict):
 
@@ -71,11 +107,21 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
 
         # compute noised coords and set target, both must be float32
         data[AtomicDataDict.POSITIONS_KEY] = (alpha * x  + sigma * eps).float()
-        data['noise_target'] = eps
+        data['noise_target'] = eps.float()
 
         # add t-embedding to data obj
-        data['t_embedded_per_node'] = self.t_embedder(t, batch_idxs)
-        assert data['t_embedded_per_node'].shape == (x.shape[0], self.t_embedder.out_size)
+        data['conditioning'] = self.t_embedder(t, batch_idxs)
+        data['sampled_t'] = t[batch_idxs]
+
+        if self.labels_conditioned:
+            # add label to data obj
+            labels_as_ints = self.get_labels_as_ints(data)
+            labels_as_ints = self.cond_uncond_train_step(labels_as_ints)
+            data['sampled_labels'] = labels_as_ints[batch_idxs]
+            labels_emb = self.labels_embedder(labels_as_ints)
+            data['conditioning'] = torch.cat([data['conditioning'], labels_emb[batch_idxs].squeeze(1)], dim=-1)
+
+        assert data['conditioning'].shape == (x.shape[0], self.irreps_out['conditioning'].dim)
         return data
 
 
