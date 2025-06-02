@@ -30,17 +30,6 @@ def appendNGNNLayers(config):
     modules = {}
     logging.info(f"--- Number of GNN layers {N}")
 
-    # # attention on embeddings
-    # modules.update({
-    #     "update_emb": (ReadoutModuleWithConditioning, dict(
-    #         field=AtomicDataDict.NODE_ATTRS_KEY,
-    #         out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
-    #         out_irreps=None, # outs tensor of same o3.irreps of out_field
-    #         resnet=True,
-    #         num_heads=8, # this number must be a 0 reminder of the sum of catted nn.embedded features (node and edges)
-    #     ))
-    # })
-
     for layer_idx in range(N-1):
         layer_name:str = 'local_interaction' if layer_idx == 0 else f"interaction_{layer_idx}"
         modules.update({
@@ -64,7 +53,7 @@ def appendNGNNLayers(config):
                 out_field=AtomicDataDict.NODE_ATTRS_KEY, # scalars only
                 out_irreps=None, # outs tensor of same o3.irreps of out_field
                 resnet=True,
-                # scalar_attnt=True,
+                scalar_attnt=True,
             )),
         })
 
@@ -87,13 +76,8 @@ def appendNGNNLayers(config):
             out_field=AtomicDataDict.NODE_FEATURES_KEY, # scalars only
             out_irreps=None, # outs tensor of same o3.irreps of out_field
             resnet=True,
-            # scalar_attnt=True,
+            scalar_attnt=True,
         )),
-        # "global_node_pooling": (NodewiseReduce, dict(
-        #     field=AtomicDataDict.NODE_FEATURES_KEY,
-        #     out_field=AtomicDataDict.GRAPH_FEATURES_KEY,
-        #     # residual_field=AtomicDataDict.NODE_ATTRS_KEY,
-        # )),
     })
     return modules
 

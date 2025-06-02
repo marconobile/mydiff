@@ -1,4 +1,5 @@
 # Python
+*.xtc
 *.yaml
 *.gro
 *.png
@@ -114,3 +115,6 @@ dmypy.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+.alanine-dipeptide-2-250ns-nowater.xtc_offsets.lock
+exportpath.txt
+pgqm_log.txt

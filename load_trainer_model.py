@@ -194,8 +194,8 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         trainer.init_model(model=model)
         trainer.update_kwargs(config)
 
-        ddpm_sampling(trainer)
-        ddim_sampling(trainer)
+        # ddpm_sampling(trainer) # ddpm_sampling(trainer, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0)
+        ddim_sampling(trainer) # ddim_sampling(trainer, method="quadratic", n_steps:int = 50, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0) # n_steps: how many t to do in sampling
     except KeyboardInterrupt:
         logging.info("Process manually stopped!")
     except Exception as e:
