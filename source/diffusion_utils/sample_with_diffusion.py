@@ -30,7 +30,6 @@ def fetch(trainer):
     if not diff_module: raise ValueError(f"Diffusion module not found in model: {model}")
 
     device = trainer.device
-    n_samples=1
     TMax = diff_module.T
     log_dir = trainer.output.workdir
 
@@ -39,7 +38,7 @@ def fetch(trainer):
     labels_conditioned = diff_module.labels_conditioned
     number_of_labels = diff_module.number_of_labels
 
-    return model, diff_module, device, n_samples, TMax, atom_types, log_dir, labels_conditioned, number_of_labels
+    return model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels
 
 def get_noise_pred(model, t_tensor, x_t, atom_types, condition_class:int, labels_conditioned:bool, number_of_labels:int, guidance_scale:float):
     #! EDGE_VECTORS_KEY, EDGE_LENGTH_KEY are always recomputed inside the fwd of model
@@ -67,7 +66,11 @@ def get_noise_pred(model, t_tensor, x_t, atom_types, condition_class:int, labels
     out = model(AtomicData.to_AtomicDataDict(data))
     coditioned_eps_pred = out['noise']
 
-    guided_noise = uncoditioned_eps_pred + guidance_scale * (coditioned_eps_pred - uncoditioned_eps_pred)
+    # guided_noise = uncoditioned_eps_pred + guidance_scale * (coditioned_eps_pred - uncoditioned_eps_pred)
+    # (1 + w) * eps_cond - w * eps_uncond
+    w = guidance_scale
+    guided_noise = (1 + w) * coditioned_eps_pred - w * uncoditioned_eps_pred
+
     return guided_noise
 
 class DiffusionSamplerLogger(object):
@@ -75,9 +78,10 @@ class DiffusionSamplerLogger(object):
         self.log_dir = os.path.join(log_dir, sampler_type)
         os.makedirs(self.log_dir, exist_ok=True)
 
-    def log(self, epoch, sample_idx, positions_for_gif):
-        sampling_log = os.path.join(self.log_dir, f"gif_mol_epoch_{epoch}_{sample_idx}.log")
+    def log(self, epoch, sample_idx, positions_for_gif, condition_class, gscale, tmax, atom_types):
+        sampling_log = os.path.join(self.log_dir, f"pos_per_tmax_{tmax}_epoch_{epoch}_sampleID_{sample_idx}_label_{condition_class}_gscale_{gscale}.log")
         with open(sampling_log, 'w') as f:
+            f.write(f"Atom types: {atom_types.tolist()}\n")
             for t_idx, pos in enumerate(positions_for_gif):
                 f.write(f"Timestep: {t_idx}\n")
                 for atom_idx, atom_pos in enumerate(pos):
@@ -85,17 +89,23 @@ class DiffusionSamplerLogger(object):
                 f.write("\n")
 
 
-
-
 @torch.no_grad()
-def ddim_sampling(trainer, method="quadratic", n_steps:int = 50, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0): # n_steps: how many t to do in sampling
+def ddim_sampling(
+    trainer,
+    method="quadratic",
+    n_steps:int = 50,
+    t_init:int = 0,
+    condition_class:int = 0,
+    guidance_scale:float = 7.0,
+    forced_log_dir:str=None,
+    iter_epochs:int=5,
+    n_samples:int=1,
+): # n_steps: how many t to do in sampling
 
-    if trainer.iepoch % 5 != 0: return
-
-    model, diff_module, device, n_samples, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
+    if trainer.iepoch % iter_epochs != 0: return
+    model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     if t_init >= TMax: raise ValueError(f"t_init ({t_init}) must be less than TMax ({TMax})")
-
-    logger = DiffusionSamplerLogger(log_dir, 'ddim_sampler')
+    logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'ddim_sampler')
 
     alpha_bar = diff_module.noise_scheduler.alpha_bar
 
@@ -121,10 +131,10 @@ def ddim_sampling(trainer, method="quadratic", n_steps:int = 50, t_init:int = 0,
         initial_rand_pos = x_t.clone().detach()
         positions_for_gif = [initial_rand_pos]
 
-        for i in tqdm(reversed(range(t_init, n_steps)), desc="DDIM Sampling Progress"):
+        for i in tqdm(reversed(range(t_init, n_steps)), desc=f"DDIM Sampling Progress for sample {sample_idx}"):
             # get t and prev_t
             t = time_steps[i]
-            t_tensor = torch.full((n_samples,), t, dtype=torch.long, device=device)
+            t_tensor = torch.full((1,), t, dtype=torch.long, device=device)
             t_prev = time_steps_prev[i]
             # t_prev_tensor = torch.ones(n_samples, dtype=torch.long, device=device) * t_prev
 
@@ -159,17 +169,22 @@ def ddim_sampling(trainer, method="quadratic", n_steps:int = 50, t_init:int = 0,
             x_t = center_pos(x_t)
             positions_for_gif.append(x_t.clone().detach())
 
-        logger.log(trainer.iepoch, sample_idx, positions_for_gif)
+        logger.log(trainer.iepoch, sample_idx, positions_for_gif, condition_class, guidance_scale, n_steps, atom_types)
 
 
 @torch.no_grad()
-def ddpm_sampling(trainer, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0):
-
-    if trainer.iepoch % 5 != 0: return
-    model, diff_module, device, n_samples, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
+def ddpm_sampling(
+    trainer,
+    t_init:int = 0,
+    condition_class:int = 0,
+    guidance_scale:float = 7.0,
+    n_samples:int=1,
+    iter_epochs:int=5,
+):
+    if trainer.iepoch % iter_epochs != 0: return
+    model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     if t_init >= TMax: raise ValueError(f"t_init ({t_init}) must be less than TMax ({TMax})")
     logger = DiffusionSamplerLogger(log_dir, 'ddpm_sampler')
-
 
     # fetch params for quick access from diff model
     one_minus_alphas = diff_module.noise_scheduler.one_minus_alphas
@@ -215,7 +230,7 @@ def ddpm_sampling(trainer, t_init:int = 0, condition_class:int = 0, guidance_sca
             x_t = center_pos(x_t)
             positions_for_gif.append(x_t.clone().detach())
 
-        logger.log(trainer.iepoch, sample_idx, positions_for_gif)
+        logger.log(trainer.iepoch, sample_idx, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
 
 
 

@@ -117,7 +117,7 @@ class ForwardDiffusionModule(GraphModuleMixin, torch.nn.Module):
             # add label to data obj
             labels_as_ints = self.get_labels_as_ints(data)
             labels_as_ints = self.cond_uncond_train_step(labels_as_ints)
-            data['sampled_labels'] = labels_as_ints[batch_idxs]
+            data['sampled_labels'] = labels_as_ints #[batch_idxs]
             labels_emb = self.labels_embedder(labels_as_ints)
             data['conditioning'] = torch.cat([data['conditioning'], labels_emb[batch_idxs].squeeze(1)], dim=-1)
 

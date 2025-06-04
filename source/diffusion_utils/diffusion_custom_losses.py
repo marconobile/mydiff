@@ -3,15 +3,14 @@ import torch.nn as nn
 from torch_scatter import scatter_mean
 import os
 
-class TCMSE:
+class T_MSE:
     def __init__(
         self,
-        func_name: str='t_c_mse_loss',
+        func_name: str='T_MSE',
         params: dict = {},
         **kwargs,
     ):
-        self.func_name = 'MSE'
-        # self.params = params
+        self.func_name = func_name
         self.mse = nn.MSELoss(reduction='none') # # reduction is by default mean
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -19,8 +18,6 @@ class TCMSE:
             setattr(self, key, value)
 
         self.log_file = os.path.join(self.save_path, "loss_per_t.txt")
-
-
 
     def __call__(
         self,
@@ -40,7 +37,50 @@ class TCMSE:
         out[out == 0.0] = float('nan')
         with open(self.log_file, "a") as f:
             f.write(f"{out.tolist()}\n")
-        return out
+        return losses
+
+
+class C_MSE:
+    def __init__(
+        self,
+        func_name: str='C_MSE',
+        params: dict = {},
+        **kwargs,
+    ):
+        self.func_name = func_name
+        self.mse = nn.MSELoss(reduction='none') # # reduction is by default mean
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+        for key, value in params.items():
+            setattr(self, key, value)
+
+        self.log_file = os.path.join(self.save_path, "loss_per_c.txt")
+        self.fill_value = -1.0
+
+    def __call__(
+        self,
+        pred: dict,
+        ref: dict,
+        key: str,
+        mean: bool = True,
+        **kwargs,
+    ):
+        preds = pred[key]
+        targets = ref[key]
+        batch = pred['batch'].squeeze()    # (N,)
+        losses = self.mse(targets, preds)
+        # First, mean over the 3 dimensions for each node
+        node_loss = losses.mean(dim=1)     # (N,)
+        # Then, aggregate by batch index (G groups)
+        losses = scatter_mean(node_loss, batch, dim=0)  # (G,)
+        labels = pred['sampled_labels'].squeeze()
+        out = torch.full(size=(self.number_of_labels,), fill_value=self.fill_value, device=preds.device)
+        out = scatter_mean(losses, labels, dim=0, out=out)  # (G,)
+        out[out == self.fill_value] = float('nan')
+        with open(self.log_file, "a") as f:
+            f.write(f"{out.tolist()}\n")
+        return losses
+
 
 
 # class DiffusionLoss:

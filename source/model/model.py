@@ -54,6 +54,7 @@ def appendNGNNLayers(config):
                 out_irreps=None, # outs tensor of same o3.irreps of out_field
                 resnet=True,
                 scalar_attnt=True,
+                normalize_l1=True,
             )),
         })
 
@@ -77,6 +78,7 @@ def appendNGNNLayers(config):
             out_irreps=None, # outs tensor of same o3.irreps of out_field
             resnet=True,
             scalar_attnt=True,
+            normalize_l1=True,
         )),
     })
     return modules
