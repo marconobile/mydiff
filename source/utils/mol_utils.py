@@ -5,7 +5,7 @@ from rdkit.Chem import rdMolDescriptors, DataStructs, AllChem, rdMolAlign
 
 import mendeleev
 
-def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, removeHs: bool = True) -> Chem.Mol:
+def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, removeHs: bool = True, sanitize:bool = True) -> Chem.Mol:
     """
     Convert coordinates and atomic numbers to an RDKit molecule.
 
@@ -42,7 +42,8 @@ def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, remo
 
     # Convert to regular molecule and sanitize
     mol = mol.GetMol()
-    Chem.SanitizeMol(mol)
+    if sanitize:
+        Chem.SanitizeMol(mol)
 
     # Handle hydrogens
     # Print initial number of atoms before hydrogen manipulation
