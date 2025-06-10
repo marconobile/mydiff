@@ -180,11 +180,12 @@ def ddpm_sampling(
     guidance_scale:float = 7.0,
     n_samples:int=1,
     iter_epochs:int=5,
+    forced_log_dir:str=None,
 ):
     if trainer.iepoch % iter_epochs != 0: return
     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     if t_init >= TMax: raise ValueError(f"t_init ({t_init}) must be less than TMax ({TMax})")
-    logger = DiffusionSamplerLogger(log_dir, 'ddpm_sampler')
+    logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'ddpm_sampler')
 
     # fetch params for quick access from diff model
     one_minus_alphas = diff_module.noise_scheduler.one_minus_alphas
