@@ -4,6 +4,63 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, DataStructs, AllChem, rdMolAlign
 
 import mendeleev
+import re
+
+def parse_last_timestep_coords_with_atom_types(gif_file_path):
+    """
+    Extract the 3D coordinates from the last timestep and atom types from the gif_mol log file.
+
+    Args:
+        gif_file_path (str): Path to the gif_mol log file
+
+    Returns:
+        tuple: (coords_tensor, atom_types_tensor)
+            coords_tensor (torch.Tensor): 3D coordinates of atoms in the last timestep
+            atom_types_tensor (torch.Tensor): Atom types as torch.int64
+    """
+    if not gif_file_path:
+        return None, None
+
+    with open(gif_file_path, 'r') as f:
+        lines = f.readlines()
+
+    # Extract atom types from the first line
+    atom_types_pattern = r'Atom types: \[(.*?)\]'
+    atom_types_match = re.match(atom_types_pattern, lines[0].strip())
+    if atom_types_match:
+        atom_types_list = [int(x.strip()) for x in atom_types_match.group(1).split(',')]
+        atom_types_tensor = torch.tensor(atom_types_list, dtype=torch.int64)
+    else:
+        atom_types_tensor = None
+
+    content = ''.join(lines)
+
+    # Find all timestep sections
+    timestep_pattern = r'Timestep: (\d+)\n((?:\d+: \[.*?\]\n)+)'
+    timesteps = re.findall(timestep_pattern, content)
+
+    if not timesteps:
+        print("No timesteps found in the file")
+        return None, atom_types_tensor
+
+    # Get the last timestep
+    last_timestep_num, last_timestep_data = timesteps[-1]
+
+    # Parse the coordinates
+    coords_pattern = r'(\d+): \[(.*?)\]'
+    coords_matches = re.findall(coords_pattern, last_timestep_data)
+
+    # Sort by atom index and extract coordinates
+    coords_matches.sort(key=lambda x: int(x[0]))
+    coords = []
+
+    for _, coord_str in coords_matches:
+        xyz = [float(val) for val in coord_str.split(',')]
+        coords.append(xyz)
+
+    coords_tensor = torch.tensor(coords)
+    return coords_tensor, atom_types_tensor
+
 
 def coords_atomicnum_to_mol(coords: torch.Tensor, atomic_num: torch.Tensor, removeHs: bool = True, sanitize:bool = True) -> Chem.Mol:
     """
@@ -155,7 +212,6 @@ def coords_group_period_to_mol(coords: torch.Tensor, group: torch.Tensor, period
     return mol
 
 
-
 def visualize_3d_mols(mols,
     drawing_style: str = 'stick',
     titles: list[str] = None,
@@ -218,7 +274,7 @@ def align_mols(samples, gt):
     best_rmsd, best_t_mat, best_idx = np.inf, None, 0
     for i, sample in enumerate(samples):
         sample_ = Chem.RemoveHs(sample)  # Remove hydrogens from the sample molecule
-        rmsd, t_mat, _ = rdMolAlign.GetBestAlignmentTransform(sample_, gt_, reflect=True, maxIters=100)
+        rmsd, t_mat, _ = rdMolAlign.GetBestAlignmentTransform(sample_, gt_, reflect=False, maxIters=100)
         if rmsd < best_rmsd:  # Update the best alignment if the RMSD is lower
             best_rmsd = rmsd
             best_t_mat = t_mat

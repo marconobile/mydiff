@@ -30,7 +30,7 @@ from geqtrain.train import (
     load_trainer_and_model,
 )
 
-from source.diffusion_utils.sample_with_diffusion import ddpm_sampling, ddim_sampling
+from source.diffusion_utils.sample_with_diffusion import ddpm_sampling, ddim_sampling, sample_alanine_transition_pathDDPM
 
 
 def parse_command_line(args=None) -> Tuple[argparse.Namespace, Config]:
@@ -197,31 +197,37 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         trainer.dataset_val = [{'node_types':torch.tensor([6, 6, 8, 7, 6, 6, 6, 8, 7, 6], dtype=torch.int64)}]
 
         # ddpm_sampling(trainer) # ddpm_sampling(trainer, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0)
-        n_samples = 50
-        list_labels = [0,1,2,3,4,5,6,7]
-        sampler = 'ddim'
-        for label in list_labels:
-            if sampler == 'ddim':
-                ddim_sampling(
-                    trainer,
-                    # method="quadratic",
-                    n_steps = 50,
-                    # t_init:int = 0,
-                    condition_class=label,
-                    guidance_scale=7.0,
-                    forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
-                    iter_epochs=1,
-                    n_samples=n_samples,
-                )
-            elif sampler == 'ddpm':
-                ddpm_sampling(
-                    trainer,
-                    condition_class=label,
-                    # guidance_scale:float = 7.0,
-                    forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
-                    n_samples=n_samples,
-                    iter_epochs=1,
-                )
+
+        sample_alanine_transition_pathDDPM(
+            trainer,
+            forced_log_dir='/home/nobilm@usi.ch/mydiff/testr_trans_path',
+        )
+
+        # n_samples = 10
+        # list_labels = [0,1,2,3,4,5,6,7]
+        # sampler = 'ddpm'
+        # for label in list_labels:
+        #     if sampler == 'ddim':
+        #         ddim_sampling(
+        #             trainer,
+        #             # method="quadratic",
+        #             n_steps = 50,
+        #             # t_init:int = 0,
+        #             condition_class=label,
+        #             guidance_scale=7.0,
+        #             forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
+        #             iter_epochs=1,
+        #             n_samples=n_samples,
+        #         )
+        #     elif sampler == 'ddpm':
+        #         ddpm_sampling(
+        #             trainer,
+        #             condition_class=label,
+        #             # guidance_scale:float = 7.0,
+        #             forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
+        #             n_samples=n_samples,
+        #             iter_epochs=1,
+        #         )
 
     except KeyboardInterrupt:
         logging.info("Process manually stopped!")

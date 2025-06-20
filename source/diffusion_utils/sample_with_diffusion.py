@@ -14,6 +14,9 @@ from source.diffusion_utils.utils import (
     alpha,
     center_pos,
 )
+from rdkit.Chem import AllChem
+import shutil
+from pathlib import Path
 
 # reference for diffusion-free guidance: https://github.com/ncchaudhari10/Classifier-Free-Diffusion/blob/main/inference.py
 
@@ -89,6 +92,16 @@ class DiffusionSamplerLogger(object):
                 f.write("\n")
 
 
+def get_time_steps(method, n_steps, TMax):
+    if method == "linear":
+        step_size = TMax // n_steps
+        time_steps = np.asarray(list(range(0, TMax, step_size)), dtype=int)
+    elif method == "quadratic":
+        time_steps = (np.linspace(0, np.sqrt(TMax * 0.8), n_steps) ** 2).astype(int)
+    else:
+        raise NotImplementedError(f"sampling method {method} is not implemented!")
+    return time_steps
+
 @torch.no_grad()
 def ddim_sampling(
     trainer,
@@ -108,18 +121,7 @@ def ddim_sampling(
     logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'ddim_sampler')
 
     alpha_bar = diff_module.noise_scheduler.alpha_bar
-
-    def get_time_steps(method, n_steps):
-        if method == "linear":
-            step_size = TMax // n_steps
-            time_steps = np.asarray(list(range(0, TMax, step_size)), dtype=int)
-        elif method == "quadratic":
-            time_steps = (np.linspace(0, np.sqrt(TMax * 0.8), n_steps) ** 2).astype(int)
-        else:
-            raise NotImplementedError(f"sampling method {method} is not implemented!")
-        return time_steps
-
-    time_steps = get_time_steps(method, n_steps)
+    time_steps = get_time_steps(method, n_steps, TMax)
     time_steps = time_steps + 1
     time_steps_prev = np.concatenate([[0], time_steps[:-1]])
 
@@ -170,6 +172,7 @@ def ddim_sampling(
             positions_for_gif.append(x_t.clone().detach())
 
         logger.log(trainer.iepoch, sample_idx, positions_for_gif, condition_class, guidance_scale, n_steps, atom_types)
+        return x_t
 
 
 @torch.no_grad()
@@ -181,11 +184,17 @@ def ddpm_sampling(
     n_samples:int=1,
     iter_epochs:int=5,
     forced_log_dir:str=None,
+    initial_rand_pos:torch.Tensor=None, # if not None, will use this as initial position instead of sampling from prior
+    force_tmax:int=-1, # if not None, will use this as TMax instead of the one from the diffusion module
 ):
     if trainer.iepoch % iter_epochs != 0: return
     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     if t_init >= TMax: raise ValueError(f"t_init ({t_init}) must be less than TMax ({TMax})")
     logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'ddpm_sampler')
+
+    if force_tmax >= 0:
+        TMax = force_tmax
+        if t_init >= TMax: raise ValueError(f"t_init ({t_init}) must be less than TMax ({TMax})")
 
     # fetch params for quick access from diff model
     one_minus_alphas = diff_module.noise_scheduler.one_minus_alphas
@@ -196,8 +205,14 @@ def ddpm_sampling(
     for sample_idx in range(n_samples):
         # atom_types = atom_types[torch.randperm(atom_types.size(0))]
 
-        # initial rand coords sampled from prior
-        x_t = center_pos((sample_noise_from_N_0_1(size=(atom_types.shape[0], 3), device=device)))
+        if initial_rand_pos is not None:
+            if initial_rand_pos.shape[0] != atom_types.shape[0]:
+                raise ValueError(f"initial_rand_pos must have the same number of atoms as atom_types ({atom_types.shape[0]}), got {initial_rand_pos.shape[0]}")
+            x_t = center_pos(initial_rand_pos.clone().detach())
+        else:
+            # initial rand coords sampled from prior
+            x_t = center_pos((sample_noise_from_N_0_1(size=(atom_types.shape[0], 3), device=device)))
+
         initial_rand_pos = x_t.clone().detach()
         positions_for_gif = [initial_rand_pos]
 
@@ -232,14 +247,301 @@ def ddpm_sampling(
             positions_for_gif.append(x_t.clone().detach())
 
         logger.log(trainer.iepoch, sample_idx, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
+        if n_samples == 1:
+            return x_t
 
 
 
 
 
 
+# pseudo:
+# def sample_alanine_transition_path():
+#     x_a = ddim(wn, t = tmax, a)
+#     x_b = ddim(wn, t = tmax, b)
+
+#     x_tmp = x_a
+#     t = 8 # or 2
+
+#     while( rmsd(x_tmp, x_b) > .3):
+#         x_tmp_new = ddim(x_tmp, t, b)
+#         norm = l2norm (x_tmp_new, x_tmp)
+#         # score norm?
+#         x_tmp = x_tmp_new
+#         cast xtmp to same atom ordering of xb for correct rmsd calc
+#         care i might need to denoise fully sampled struct b4 computing rmsd
 
 
+@torch.no_grad()
+def single_DDPM_step(
+    atom_types,
+    device,
+    x_t,
+    t,
+    model,
+    condition_class,
+    labels_conditioned,
+    number_of_labels,
+    guidance_scale,
+    diff_module,
+):
+    # fetch params for quick access from diff model
+    one_minus_alphas = diff_module.noise_scheduler.one_minus_alphas
+    sqrt_alphas = diff_module.noise_scheduler.sqrt_alphas
+    sqrt_one_minus_alpha_bar = diff_module.noise_scheduler.sqrt_one_minus_alpha_bar
+    sqrt_betas = diff_module.noise_scheduler.sqrt_betas
+
+    # get noise in x_t
+    epsilon_pred = get_noise_pred(
+        model,
+        torch.tensor([t], device=device),
+        x_t,
+        atom_types,
+        condition_class=condition_class,
+        labels_conditioned=labels_conditioned,
+        number_of_labels=number_of_labels,
+        guidance_scale=guidance_scale,
+    )
+
+    # get coefficients for x_t-1 calculation
+    _sqrt_alpha_t = sqrt_alphas[t].to(device)
+    _one_minus_alpha_t = one_minus_alphas[t].to(device)
+    _sqrt_one_minus_alpha_bar_t = sqrt_one_minus_alpha_bar[t].to(device)
+    _sqrt_betas = sqrt_betas[t].to(device)
+
+    # sample noise if not t=0
+    if t > 1:
+        z = center_pos((sample_noise_from_N_0_1(size=(x_t.shape[0], 3), device=device)))
+    else:
+        z = torch.zeros(size=(x_t.shape[0], 3), device=device)
+
+    x_t = 1 / _sqrt_alpha_t * (x_t - (_one_minus_alpha_t/_sqrt_one_minus_alpha_bar_t)*epsilon_pred) + _sqrt_betas*z
+    return center_pos(x_t)
+
+
+# @torch.no_grad()
+# def single_DDIM_step(
+#     i,
+#     atom_types,
+#     device,
+#     x_t,
+#     model,
+#     condition_class,
+#     labels_conditioned,
+#     number_of_labels,
+#     guidance_scale,
+#     diff_module,
+#     time_steps,
+#     time_steps_prev,
+#     alpha_bar,
+# ):
+#     # get t and prev_t
+#     t = time_steps[i]
+#     t_tensor = torch.full((1,), t, dtype=torch.long, device=device)
+#     t_prev = time_steps_prev[i]
+#     # t_prev_tensor = torch.ones(n_samples, dtype=torch.long, device=device) * t_prev
+
+#     # get alphabar and alphabar prev
+#     alpha_bar_t = alpha_bar[t]
+#     alpha_t_prev = alpha_bar[t_prev]
+
+#     eps_pred = get_noise_pred(
+#         model,
+#         t_tensor,
+#         x_t,
+#         atom_types,
+#         condition_class=condition_class,
+#         labels_conditioned=labels_conditioned,
+#         number_of_labels=number_of_labels,
+#         guidance_scale=guidance_scale,
+#     )
+
+#     # DDIM update rule
+#     eta = 0.0
+#     sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_bar_t) * (1 - alpha_bar_t / alpha_t_prev))
+
+#     # sample noise if not t=0
+#     if i > 1:
+#         epsilon_t = center_pos((sample_noise_from_N_0_1(size=(atom_types.shape[0], 3), device=device)))
+#     else:
+#         epsilon_t = torch.zeros(size=(atom_types.shape[0], 3), device=device)
+
+#     x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
+#     dir_xt = torch.sqrt(1 - alpha_t_prev - sigma_t ** 2) * eps_pred
+#     x_t = torch.sqrt(alpha_t_prev) * x0_pred + dir_xt + sigma_t * epsilon_t
+#     return center_pos(x_t)
+
+
+
+def rmsd(x_t, ref_mol, atom_types, itr):
+    _rmsd = 42
+    if x_t is None: # if x_clean is None, we are still in the first iteration
+        return _rmsd
+    try:
+        mol_t = coords_atomicnum_to_mol(x_t, atom_types, sanitize=False)
+        _rmsd = AllChem.GetBestRMS(mol_t, ref_mol)
+    except:
+        pass
+    print(f"itr {itr}, rmsd: {_rmsd}")
+    return _rmsd
+
+
+def rm_files(fd):
+    if os.path.exists(fd):
+        for filename in os.listdir(fd):
+            file_path = os.path.join(fd, filename)
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+
+# @torch.no_grad()
+# def sample_alanine_transition_pathDDIM(
+#     trainer,
+#     condition_class:int = 0,
+#     guidance_scale:float = 7.0,
+#     forced_log_dir:str=None,
+# ):
+#     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
+#     logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'tpsampler')
+#     rm_files(logger.log_dir)
+
+#     fd = '/home/nobilm@usi.ch/mydiff/testr_trans_path/xa'
+#     rm_files(fd)
+#     x_a = ddim_sampling( # defaults generate C5
+#         trainer,
+#         iter_epochs=1,
+#         forced_log_dir=fd,
+#     )
+#     positions_for_gif = [x_a]
+
+#     fd = '/home/nobilm@usi.ch/mydiff/testr_trans_path/xb'
+#     rm_files(fd)
+#     condition_class = 1  # let's do from C5 to PII
+#     x_b = ddim_sampling(
+#         trainer,
+#         iter_epochs=1,
+#         condition_class = condition_class,
+#         forced_log_dir=fd,
+#     )
+
+#     alpha_bar = diff_module.noise_scheduler.alpha_bar
+#     n_steps = 100
+#     method = 'quadratic'
+#     time_steps = get_time_steps(method, n_steps, TMax)
+#     time_steps = time_steps + 1
+#     time_steps_prev = np.concatenate([[0], time_steps[:-1]])
+
+#     x_tmp = x_a
+#     ref_mol = coords_atomicnum_to_mol(x_b, atom_types, sanitize=False)
+#     t = 19 # or 2, they use 8/1000, I d need to use .8 to match noise level
+#     # this is tricku i might need to do some iterations in latent
+#     # for n_steps = 50: 6, 8, 10 diverges, 4 does not moves
+#     # for n_steps = 100: 6, 8 10  stuck 20 explodes
+#     # 17 starts to decrease (too slowly) # 18 19
+#     treshold = .3
+#     itr = 0
+#     while(rmsd(x_tmp, ref_mol, atom_types, itr) > treshold):
+#         x_tmp_new = single_DDIM_step(
+#             t,
+#             atom_types,
+#             device,
+#             x_tmp,
+#             model,
+#             condition_class,
+#             labels_conditioned,
+#             number_of_labels,
+#             200.0,
+#             diff_module,
+#             time_steps,
+#             time_steps_prev,
+#             alpha_bar,
+#         )
+#         x_tmp = x_tmp_new
+#         positions_for_gif.append(x_tmp_new.clone().detach())
+#         itr +=1
+
+#     logger.log(trainer.iepoch, 0, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
+
+
+@torch.no_grad()
+def sample_alanine_transition_pathDDPM(
+    trainer,
+    condition_class:int = 0,
+    guidance_scale:float = 7.0,
+    forced_log_dir:str=None,
+):
+    # C5: 0
+    # PII: 1
+    # alphaP: 2 WRONG
+    # alphaR: 3
+    # C7ax: 4
+    # alphaL: 5
+
+    start_state_category = 0
+    target_state_category = 1
+
+    model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
+    logger = DiffusionSamplerLogger(forced_log_dir if forced_log_dir else log_dir, 'TPS_from_{}_to_{}'.format(start_state_category, target_state_category))
+    rm_files(logger.log_dir)
+
+    # generate start state
+    start_pos = ddim_sampling(
+        trainer,
+        iter_epochs=1,
+        condition_class = start_state_category,
+        forced_log_dir=str(Path(logger.log_dir) / 'start_state'),
+    )
+    # positions_for_gif = [start_pos]
+
+    # generate target state
+    target_pos = ddim_sampling(
+        trainer,
+        iter_epochs=1,
+        condition_class = target_state_category,
+        forced_log_dir=str(Path(logger.log_dir) / 'target_state'),
+    )
+    ref_mol = coords_atomicnum_to_mol(target_pos, atom_types, sanitize=False)
+
+    # hyperparameters
+    t = 8
+    treshold = .25
+    x_clean = None
+    itr = 0
+    eval_every = 200
+    x_tmp = start_pos
+    while(rmsd(x_clean, ref_mol, atom_types, itr) > treshold):
+        x_tmp_new = single_DDPM_step( # single FF step
+            atom_types,
+            device,
+            x_tmp,
+            t,
+            model,
+            target_state_category,
+            labels_conditioned,
+            number_of_labels,
+            guidance_scale, # crank it up if needed
+            diff_module,
+        )
+
+        if itr % eval_every == 0:
+            x_clean = ddpm_sampling(
+                trainer,
+                condition_class=target_state_category,
+                # guidance_scale = 7.0,
+                iter_epochs=1,
+                forced_log_dir=str(Path(logger.log_dir) / f'TP_itr_{itr}'),
+                initial_rand_pos=x_tmp_new, # if not None, will use this as initial position instead of sampling from prior
+                force_tmax=t-1
+            )
+        else:
+            x_clean = None
+
+        x_tmp = x_tmp_new
+        # positions_for_gif.append(x_tmp_new.clone().detach())
+        itr+=1
+
+    # logger.log(trainer.iepoch, 0, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
 
 
 
