@@ -196,16 +196,14 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         # trainer.dataset_val[0]['node_types'].squeeze().to(device)
         trainer.dataset_val = [{'node_types':torch.tensor([6, 6, 8, 7, 6, 6, 6, 8, 7, 6], dtype=torch.int64)}]
 
-        # ddpm_sampling(trainer) # ddpm_sampling(trainer, t_init:int = 0, condition_class:int = 0, guidance_scale:float = 7.0)
-
         sample_alanine_transition_pathDDPM(
             trainer,
             forced_log_dir='/home/nobilm@usi.ch/mydiff/testr_trans_path',
         )
 
-        # n_samples = 10
+        # n_samples = 5
         # list_labels = [0,1,2,3,4,5,6,7]
-        # sampler = 'ddpm'
+        # sampler = 'ddim'
         # for label in list_labels:
         #     if sampler == 'ddim':
         #         ddim_sampling(
