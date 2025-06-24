@@ -18,6 +18,42 @@ from rdkit.Chem import AllChem
 import shutil
 from pathlib import Path
 
+
+# def guidance_scale_scheduler(steps):
+#     half = torch.linspace(4, -1, steps)
+#     # Create a symmetric scheduler that stays at -1 for half of the steps
+#     steps = half.shape[0]
+#     hold_steps = steps // 2
+
+#     # First half: 4 → -1
+#     down = torch.linspace(4, -1, steps // 4)
+#     # Middle: hold at -1
+#     hold = -1 * torch.ones(hold_steps)
+#     # Last half: -1 → 4
+#     up = torch.linspace(-1, 4, steps // 4)
+
+#     # Concatenate all parts
+#     return torch.cat([down, hold, up])
+
+def guidance_scale_scheduler(steps):
+    half = torch.linspace(4, 0, steps)
+    # Create a symmetric scheduler that stays at 0 for half of the steps
+    steps = half.shape[0]
+    hold_steps = steps // 2
+
+    # First half: 4 → 0
+    down = torch.linspace(4, 0, steps // 4)
+    # Middle: hold at 0
+    hold = 0 * torch.ones(hold_steps)
+    # Last half: 0 → 4
+    up = torch.linspace(0, 4, steps // 4)
+
+    # Concatenate all parts
+    return torch.cat([down, hold, up])
+
+
+
+
 # reference for diffusion-free guidance: https://github.com/ncchaudhari10/Classifier-Free-Diffusion/blob/main/inference.py
 
 def fetch(trainer):
@@ -130,7 +166,7 @@ def ddim_sampling(
     condition_class:int = 0,
     guidance_scale:float = 7.0,
     forced_log_dir:str=None,
-    iter_epochs:int=5,
+    iter_epochs:int=1,
     n_samples:int=1,
 ): # n_steps: how many t to do in sampling
 
@@ -489,9 +525,13 @@ def sample_alanine_transition_pathDDPM(
 
     #! hyperparameters
     t = 8
-    guidance_scale = 4.0
-    path_len = 10000
+    # guidance_scale = 4.0
+    path_len = 50000
     coeffs = torch.linspace(0, 1, path_len)
+
+
+    # guidance_scale_itr = torch.linspace(-1, 4.0, path_len)
+    guidance_scale_itr = guidance_scale_scheduler(path_len)
 
     # # coeffs tweaking:
     # insert_start, insert_end = 0.79, 0.80
@@ -510,10 +550,11 @@ def sample_alanine_transition_pathDDPM(
         f.write(f"treshold: {treshold}\n")
         f.write(f"eval_every: {eval_every}\n")
         f.write(f"path_len: {path_len}\n")
-        f.write(f"guidance_scale: {guidance_scale}\n")
+        # f.write(f"guidance_scale: {guidance_scale}\n")
 
 
     interpolation_coeff = coeffs[itr]
+    guidance_scale = guidance_scale_itr[itr]
 
     # while(rmsd(x_clean, ref_mol, atom_types, itr, log_file) > treshold):
     for _ in range(coeffs.shape[0]):
@@ -533,7 +574,7 @@ def sample_alanine_transition_pathDDPM(
         )
 
         if itr % eval_every == 0:
-            print(f"iter {itr} - interpolation_coeff: {interpolation_coeff}")
+            print(f"iter {itr} - interpolation_coeff: {interpolation_coeff}, guidance_scale: {guidance_scale}")
             x_clean = ddpm_sampling(
                 trainer,
                 condition_class=start_state_category, #target_state_category,
@@ -550,12 +591,14 @@ def sample_alanine_transition_pathDDPM(
 
         x_tmp = x_tmp_new
         # positions_for_gif.append(x_tmp_new.clone().detach())
-        itr+=1
-        interpolation_coeff = coeffs[itr]
         if x_clean != None:
             rmsd_value = rmsd(x_clean, ref_mol, atom_types, itr, log_file)
             with open(log_file, "a") as f:
-                f.write(f"itr {itr}, rmsd: {rmsd_value:.3f}, coeff {interpolation_coeff}\n")
+                f.write(f"itr {itr}, rmsd: {rmsd_value:.3f}, coeff {interpolation_coeff}, guidance {guidance_scale}\n")
+
+        itr+=1
+        interpolation_coeff = coeffs[itr]
+        guidance_scale = guidance_scale_itr[itr]
 
         if rmsd_value < treshold:
             break
