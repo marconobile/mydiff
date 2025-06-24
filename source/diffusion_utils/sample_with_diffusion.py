@@ -1,3 +1,5 @@
+# reference for diffusion-free guidance: https://github.com/ncchaudhari10/Classifier-Free-Diffusion/blob/main/inference.py
+
 import math
 import os
 import wandb
@@ -19,42 +21,22 @@ import shutil
 from pathlib import Path
 
 
-# def guidance_scale_scheduler(steps):
-#     half = torch.linspace(4, -1, steps)
-#     # Create a symmetric scheduler that stays at -1 for half of the steps
-#     steps = half.shape[0]
-#     hold_steps = steps // 2
-
-#     # First half: 4 → -1
-#     down = torch.linspace(4, -1, steps // 4)
-#     # Middle: hold at -1
-#     hold = -1 * torch.ones(hold_steps)
-#     # Last half: -1 → 4
-#     up = torch.linspace(-1, 4, steps // 4)
-
-#     # Concatenate all parts
-#     return torch.cat([down, hold, up])
-
-def guidance_scale_scheduler(steps):
-    half = torch.linspace(4, 0, steps)
-    # Create a symmetric scheduler that stays at 0 for half of the steps
+def guidance_scale_scheduler(steps, min_guidance=0.0, max_guidance=4.0):
+    half = torch.linspace(max_guidance, min_guidance, steps)
+    # Create a symmetric scheduler that stays at min_guidance for half of the steps
     steps = half.shape[0]
     hold_steps = steps // 2
 
-    # First half: 4 → 0
-    down = torch.linspace(4, 0, steps // 4)
-    # Middle: hold at 0
-    hold = 0 * torch.ones(hold_steps)
-    # Last half: 0 → 4
-    up = torch.linspace(0, 4, steps // 4)
+    # First half: max_guidance → min_guidance
+    down = torch.linspace(max_guidance, min_guidance, steps // 4) # 1/4 in a, 1/4 to go to b, 1/2 to hold to min_guidance
+    # Middle: hold at min_guidance
+    hold = min_guidance * torch.ones(hold_steps)
+    # Last half: min_guidance → max_guidance
+    up = torch.linspace(min_guidance, max_guidance, steps // 4)
 
     # Concatenate all parts
     return torch.cat([down, hold, up])
 
-
-
-
-# reference for diffusion-free guidance: https://github.com/ncchaudhari10/Classifier-Free-Diffusion/blob/main/inference.py
 
 def fetch(trainer):
 
@@ -79,6 +61,8 @@ def fetch(trainer):
 
     return model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels
 
+@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+@torch.no_grad()
 def get_noise_pred(
     model,
     t_tensor,
@@ -100,7 +84,6 @@ def get_noise_pred(
         AtomicDataDict.R_MAX_KEY:     torch.finfo(torch.float32).max,
         AtomicDataDict.BATCH_KEY:     torch.zeros((x_t.shape[0], 1), device=t_tensor.device),
         AtomicDataDict.NODE_TYPE_KEY: atom_types,
-
     }
 
     args['labels'] = torch.full((bs, 1), number_of_labels-1,  dtype=torch.int64, device=t_tensor.device) # last label for no conditioning if not labels_conditioned then not used in fwd
@@ -157,6 +140,7 @@ def get_time_steps(method, n_steps, TMax):
         raise NotImplementedError(f"sampling method {method} is not implemented!")
     return time_steps
 
+@torch.amp.autocast('cuda', enabled=False) # sample at high precision
 @torch.no_grad()
 def ddim_sampling(
     trainer,
@@ -230,6 +214,7 @@ def ddim_sampling(
         if n_samples == 1: return x_t
 
 
+@torch.amp.autocast('cuda', enabled=False) # sample at high precision
 @torch.no_grad()
 def ddpm_sampling(
     trainer,
@@ -309,27 +294,7 @@ def ddpm_sampling(
         if n_samples == 1: return x_t
 
 
-
-
-
-
-# pseudo:
-# def sample_alanine_transition_path():
-#     x_a = ddim(wn, t = tmax, a)
-#     x_b = ddim(wn, t = tmax, b)
-
-#     x_tmp = x_a
-#     t = 8 # or 2
-
-#     while( rmsd(x_tmp, x_b) > .3):
-#         x_tmp_new = ddim(x_tmp, t, b)
-#         norm = l2norm (x_tmp_new, x_tmp)
-#         # score norm?
-#         x_tmp = x_tmp_new
-#         cast xtmp to same atom ordering of xb for correct rmsd calc
-#         care i might need to denoise fully sampled struct b4 computing rmsd
-
-
+@torch.amp.autocast('cuda', enabled=False) # sample at high precision
 @torch.no_grad()
 def single_DDPM_step(
     atom_types,
@@ -381,60 +346,6 @@ def single_DDPM_step(
     return center_pos(x_t)
 
 
-# @torch.no_grad()
-# def single_DDIM_step(
-#     i,
-#     atom_types,
-#     device,
-#     x_t,
-#     model,
-#     condition_class,
-#     labels_conditioned,
-#     number_of_labels,
-#     guidance_scale,
-#     diff_module,
-#     time_steps,
-#     time_steps_prev,
-#     alpha_bar,
-# ):
-#     # get t and prev_t
-#     t = time_steps[i]
-#     t_tensor = torch.full((1,), t, dtype=torch.long, device=device)
-#     t_prev = time_steps_prev[i]
-#     # t_prev_tensor = torch.ones(n_samples, dtype=torch.long, device=device) * t_prev
-
-#     # get alphabar and alphabar prev
-#     alpha_bar_t = alpha_bar[t]
-#     alpha_t_prev = alpha_bar[t_prev]
-
-#     eps_pred = get_noise_pred(
-#         model,
-#         t_tensor,
-#         x_t,
-#         atom_types,
-#         condition_class=condition_class,
-#         labels_conditioned=labels_conditioned,
-#         number_of_labels=number_of_labels,
-#         guidance_scale=guidance_scale,
-#     )
-
-#     # DDIM update rule
-#     eta = 0.0
-#     sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_bar_t) * (1 - alpha_bar_t / alpha_t_prev))
-
-#     # sample noise if not t=0
-#     if i > 1:
-#         epsilon_t = center_pos((sample_noise_from_N_0_1(size=(atom_types.shape[0], 3), device=device)))
-#     else:
-#         epsilon_t = torch.zeros(size=(atom_types.shape[0], 3), device=device)
-
-#     x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
-#     dir_xt = torch.sqrt(1 - alpha_t_prev - sigma_t ** 2) * eps_pred
-#     x_t = torch.sqrt(alpha_t_prev) * x0_pred + dir_xt + sigma_t * epsilon_t
-#     return center_pos(x_t)
-
-
-
 def rmsd(x_t, ref_mol, atom_types, itr, log_file):
     _rmsd = 42
     if x_t is None: # if x_clean is None, we are still in the first iteration
@@ -473,6 +384,7 @@ def get_unique_exp_name(base_dir, exp_name):
 
 
 @torch.no_grad()
+@torch.amp.autocast('cuda', enabled=False) # sample at high precision
 def sample_alanine_transition_pathDDPM(
     trainer,
     condition_class:int = 0,
@@ -531,15 +443,13 @@ def sample_alanine_transition_pathDDPM(
 
 
     # guidance_scale_itr = torch.linspace(-1, 4.0, path_len)
-    guidance_scale_itr = guidance_scale_scheduler(path_len)
+    guidance_scale_itr = guidance_scale_scheduler(path_len) #! this works!
 
     # # coeffs tweaking:
     # insert_start, insert_end = 0.79, 0.80
     # insert_steps = 3000
     # insert_coeffs = torch.linspace(insert_start, insert_end, insert_steps)
     # coeffs = torch.cat((coeffs, insert_coeffs)).sort().values
-
-
 
     # log params:
     params_log_file = str(Path(logger.log_dir) / 'params.txt')
@@ -604,3 +514,85 @@ def sample_alanine_transition_pathDDPM(
             break
 
     # logger.log(trainer.iepoch, 0, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
+
+
+
+
+
+
+
+
+
+
+###############
+
+
+# pseudo:
+# def sample_alanine_transition_path():
+#     x_a = ddim(wn, t = tmax, a)
+#     x_b = ddim(wn, t = tmax, b)
+
+#     x_tmp = x_a
+#     t = 8 # or 2
+
+#     while( rmsd(x_tmp, x_b) > .3):
+#         x_tmp_new = ddim(x_tmp, t, b)
+#         norm = l2norm (x_tmp_new, x_tmp)
+#         # score norm?
+#         x_tmp = x_tmp_new
+#         cast xtmp to same atom ordering of xb for correct rmsd calc
+#         care i might need to denoise fully sampled struct b4 computing rmsd
+
+
+
+# @torch.no_grad()
+# def single_DDIM_step(
+#     i,
+#     atom_types,
+#     device,
+#     x_t,
+#     model,
+#     condition_class,
+#     labels_conditioned,
+#     number_of_labels,
+#     guidance_scale,
+#     diff_module,
+#     time_steps,
+#     time_steps_prev,
+#     alpha_bar,
+# ):
+#     # get t and prev_t
+#     t = time_steps[i]
+#     t_tensor = torch.full((1,), t, dtype=torch.long, device=device)
+#     t_prev = time_steps_prev[i]
+#     # t_prev_tensor = torch.ones(n_samples, dtype=torch.long, device=device) * t_prev
+
+#     # get alphabar and alphabar prev
+#     alpha_bar_t = alpha_bar[t]
+#     alpha_t_prev = alpha_bar[t_prev]
+
+#     eps_pred = get_noise_pred(
+#         model,
+#         t_tensor,
+#         x_t,
+#         atom_types,
+#         condition_class=condition_class,
+#         labels_conditioned=labels_conditioned,
+#         number_of_labels=number_of_labels,
+#         guidance_scale=guidance_scale,
+#     )
+
+#     # DDIM update rule
+#     eta = 0.0
+#     sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_bar_t) * (1 - alpha_bar_t / alpha_t_prev))
+
+#     # sample noise if not t=0
+#     if i > 1:
+#         epsilon_t = center_pos((sample_noise_from_N_0_1(size=(atom_types.shape[0], 3), device=device)))
+#     else:
+#         epsilon_t = torch.zeros(size=(atom_types.shape[0], 3), device=device)
+
+#     x0_pred = (x_t - torch.sqrt(1 - alpha_bar_t) * eps_pred) / torch.sqrt(alpha_bar_t)
+#     dir_xt = torch.sqrt(1 - alpha_t_prev - sigma_t ** 2) * eps_pred
+#     x_t = torch.sqrt(alpha_t_prev) * x0_pred + dir_xt + sigma_t * epsilon_t
+#     return center_pos(x_t)
