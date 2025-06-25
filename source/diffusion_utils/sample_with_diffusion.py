@@ -107,11 +107,10 @@ def get_noise_pred(
     out = model(AtomicData.to_AtomicDataDict(data))
     coditioned_eps_pred = out['noise']
 
-    # guided_noise = uncoditioned_eps_pred + guidance_scale * (coditioned_eps_pred - uncoditioned_eps_pred)
-    # (1 + w) * eps_cond - w * eps_uncond
     w = guidance_scale
-    guided_noise = (1 + w) * coditioned_eps_pred - w * uncoditioned_eps_pred
-
+    # guided_noise = (1 + w) * coditioned_eps_pred - w * uncoditioned_eps_pred
+    alpha = 0.9 # 0 rigid, 0.9 funky
+    guided_noise = coditioned_eps_pred + w * (coditioned_eps_pred - uncoditioned_eps_pred) * torch.abs(coditioned_eps_pred - uncoditioned_eps_pred).pow(alpha)
     return guided_noise
 
 class DiffusionSamplerLogger(object):
@@ -398,8 +397,8 @@ def sample_alanine_transition_pathDDPM(
     # C7ax: 4
     # alphaL: 5
 
-    start_state_category = 0
-    target_state_category = 4
+    start_state_category = 4
+    target_state_category = 0
 
     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     exp_name = 'TPS_from_{}_to_{}'.format(start_state_category, target_state_category)
