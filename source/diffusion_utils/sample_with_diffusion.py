@@ -1,21 +1,12 @@
 # reference for diffusion-free guidance: https://github.com/ncchaudhari10/Classifier-Free-Diffusion/blob/main/inference.py
 
-import math
 import os
-import wandb
 import numpy as np
 import torch
-from einops import rearrange
 from geqtrain.data import AtomicData, AtomicDataDict
-from source.utils.mol_utils import coords_atomicnum_to_mol, align_mols
+from source.utils.mol_utils import coords_atomicnum_to_mol
 from tqdm import tqdm
-from source.diffusion_utils.utils import (
-    sample_noise_from_N_0_1,
-    cdf_standard_gaussian,
-    sigma,
-    alpha,
-    center_pos,
-)
+from source.diffusion_utils.utils import sample_noise_from_N_0_1, center_pos
 from rdkit.Chem import AllChem
 import shutil
 from pathlib import Path
@@ -61,7 +52,8 @@ def fetch(trainer):
 
     return model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels
 
-@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+
+@torch.amp.autocast('cuda', enabled=False)
 @torch.no_grad()
 def get_noise_pred(
     model,
@@ -74,7 +66,6 @@ def get_noise_pred(
     guidance_scale:float,
     target_lbl:int|None=None,
     interpolation_coeff=None,
-
 ):
     #! EDGE_VECTORS_KEY, EDGE_LENGTH_KEY are always recomputed inside the fwd of model
     bs = t_tensor.shape[0]
@@ -113,6 +104,7 @@ def get_noise_pred(
     guided_noise = coditioned_eps_pred + w * (coditioned_eps_pred - uncoditioned_eps_pred) * torch.abs(coditioned_eps_pred - uncoditioned_eps_pred).pow(alpha)
     return guided_noise
 
+
 class DiffusionSamplerLogger(object):
     def __init__(self, log_dir:str, sampler_type:str):
         self.log_dir = os.path.join(log_dir, sampler_type)
@@ -139,7 +131,8 @@ def get_time_steps(method, n_steps, TMax):
         raise NotImplementedError(f"sampling method {method} is not implemented!")
     return time_steps
 
-@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+
+@torch.amp.autocast('cuda', enabled=False)
 @torch.no_grad()
 def ddim_sampling(
     trainer,
@@ -213,7 +206,7 @@ def ddim_sampling(
         if n_samples == 1: return x_t
 
 
-@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+@torch.amp.autocast('cuda', enabled=False)
 @torch.no_grad()
 def ddpm_sampling(
     trainer,
@@ -293,7 +286,7 @@ def ddpm_sampling(
         if n_samples == 1: return x_t
 
 
-@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+@torch.amp.autocast('cuda', enabled=False)
 @torch.no_grad()
 def single_DDPM_step(
     atom_types,
@@ -383,7 +376,7 @@ def get_unique_exp_name(base_dir, exp_name):
 
 
 @torch.no_grad()
-@torch.amp.autocast('cuda', enabled=False) # sample at high precision
+@torch.amp.autocast('cuda', enabled=False)
 def sample_alanine_transition_pathDDPM(
     trainer,
     condition_class:int = 0,
@@ -406,7 +399,6 @@ def sample_alanine_transition_pathDDPM(
     base_exp_dir = forced_log_dir if forced_log_dir else log_dir
     exp_name = get_unique_exp_name(base_exp_dir, exp_name)
     logger = DiffusionSamplerLogger(base_exp_dir, exp_name)
-    # rm_files(logger.log_dir)
 
     # generate start state
     start_pos = ddim_sampling(
@@ -465,7 +457,6 @@ def sample_alanine_transition_pathDDPM(
     interpolation_coeff = coeffs[itr]
     guidance_scale = guidance_scale_itr[itr]
 
-    # while(rmsd(x_clean, ref_mol, atom_types, itr, log_file) > treshold):
     for _ in range(coeffs.shape[0]):
         x_tmp_new = single_DDPM_step( # single FF step
             atom_types=atom_types,
@@ -486,7 +477,7 @@ def sample_alanine_transition_pathDDPM(
             print(f"iter {itr} - interpolation_coeff: {interpolation_coeff}, guidance_scale: {guidance_scale}")
             x_clean = ddpm_sampling(
                 trainer,
-                condition_class=start_state_category, #target_state_category,
+                condition_class=start_state_category,
                 guidance_scale=guidance_scale,
                 iter_epochs=1,
                 forced_log_dir=str(Path(logger.log_dir) / f'TP_itr_{itr}'),
