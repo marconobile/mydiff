@@ -9,6 +9,7 @@
 *.zip
 __pycache__/
 testr_trans_path/
+tp_variety_experiments/
 *.py[cod]
 *$py.class
 *.so

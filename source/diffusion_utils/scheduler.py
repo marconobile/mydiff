@@ -43,6 +43,7 @@ from torch.linalg import norm
 def slerp(v0: FloatTensor, v1: FloatTensor, t: float|FloatTensor, DOT_THRESHOLD=0.9995):
   '''
   Spherical linear interpolation
+  every SLERP output has length (l2 norm) exactly 1. since it operates on normalized vects
   Args:
     v0: Starting vector
     v1: Final vector

@@ -10,6 +10,7 @@ from source.diffusion_utils.utils import sample_noise_from_N_0_1, center_pos
 from rdkit.Chem import AllChem
 import shutil
 from pathlib import Path
+import matplotlib.pyplot as plt
 
 
 def guidance_scale_scheduler(steps, min_guidance=0.0, max_guidance=4.0):
@@ -27,6 +28,23 @@ def guidance_scale_scheduler(steps, min_guidance=0.0, max_guidance=4.0):
 
     # Concatenate all parts
     return torch.cat([down, hold, up])
+
+def guidance_scale_scheduler_flat(steps, min_guidance=0.0, max_guidance=4.0):
+    # First chunk: exponential decay from max_guidance to min_guidance, occupies 1/5 of steps
+    n_exp = steps // 7
+    exp_decay = max_guidance * torch.exp(torch.linspace(0, -3, n_exp))
+    exp_decay = (exp_decay - exp_decay[-1]) / (exp_decay[0] - exp_decay[-1]) * (max_guidance - min_guidance) + min_guidance
+
+    # Middle: hold at min_guidance
+    # n_hold = steps // 2
+    # hold = min_guidance * torch.ones(n_hold)
+
+    # Last chunk: linear up from min_guidance to max_guidance, occupies remaining steps
+    n_up = steps - n_exp # - n_hold
+    up = torch.linspace(min_guidance, max_guidance, n_up)
+    up = torch.zeros_like(up)
+
+    return torch.cat([exp_decay, up])
 
 
 def fetch(trainer):
@@ -66,6 +84,7 @@ def get_noise_pred(
     guidance_scale:float,
     target_lbl:int|None=None,
     interpolation_coeff=None,
+    alpha = 0.0, # 0 rigid, 0.9 funky, 0.0 as deactivated
 ):
     #! EDGE_VECTORS_KEY, EDGE_LENGTH_KEY are always recomputed inside the fwd of model
     bs = t_tensor.shape[0]
@@ -100,7 +119,6 @@ def get_noise_pred(
 
     w = guidance_scale
     # guided_noise = (1 + w) * coditioned_eps_pred - w * uncoditioned_eps_pred
-    alpha = 0.9 # 0 rigid, 0.9 funky
     guided_noise = coditioned_eps_pred + w * (coditioned_eps_pred - uncoditioned_eps_pred) * torch.abs(coditioned_eps_pred - uncoditioned_eps_pred).pow(alpha)
     return guided_noise
 
@@ -301,6 +319,7 @@ def single_DDPM_step(
     diff_module,
     target_lbl=None,
     interpolation_coeff=None, # if not None, will use this for conditioning interpolation
+    alpha=0.0,
 ):
     # fetch params for quick access from diff model
     one_minus_alphas = diff_module.noise_scheduler.one_minus_alphas
@@ -320,6 +339,7 @@ def single_DDPM_step(
         guidance_scale=guidance_scale,
         target_lbl=target_lbl,
         interpolation_coeff=interpolation_coeff,
+        alpha=alpha,
     )
 
     # get coefficients for x_t-1 calculation
@@ -348,6 +368,7 @@ def rmsd(x_t, ref_mol, atom_types, itr, log_file):
     except:
         pass
     print(f"itr {itr}, rmsd: {_rmsd}")
+    if _rmsd ==  42: exit()
     return _rmsd
 
 
@@ -390,8 +411,8 @@ def sample_alanine_transition_pathDDPM(
     # C7ax: 4
     # alphaL: 5
 
-    start_state_category = 4
-    target_state_category = 0
+    start_state_category = 0
+    target_state_category = 4
 
     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
     exp_name = 'TPS_from_{}_to_{}'.format(start_state_category, target_state_category)
@@ -407,7 +428,6 @@ def sample_alanine_transition_pathDDPM(
         condition_class = start_state_category,
         forced_log_dir=str(Path(logger.log_dir) / 'start_state'),
     )
-    # positions_for_gif = [start_pos]
 
     # generate target state
     target_pos = ddim_sampling(
@@ -418,31 +438,38 @@ def sample_alanine_transition_pathDDPM(
     )
     ref_mol = coords_atomicnum_to_mol(target_pos, atom_types, sanitize=False)
 
-
-    treshold = .25
-    x_clean = None
-    itr = 0
-    eval_every = 50
-    x_tmp = start_pos
-    log_file = str(Path(logger.log_dir) / 'rmsd_log.txt')
-
     #! hyperparameters
-    t = 8
-    # guidance_scale = 4.0
+    eval_every = 50
+    treshold = .25
+    t = 10
     path_len = 50000
     coeffs = torch.linspace(0, 1, path_len)
+    min_guidance = 0.0
+    guidance_scale = 7.0
+    # guidance_scale_itr = guidance_scale_scheduler_flat(path_len,  min_guidance=min_guidance, max_guidance=guidance_scale)
+    alpha = 0.9
 
 
-    # guidance_scale_itr = torch.linspace(-1, 4.0, path_len)
-    guidance_scale_itr = guidance_scale_scheduler(path_len) #! this works!
+    plt.figure()
+    # plt.plot(guidance_scale_itr.cpu().numpy())
+    plt.title("Guidance Scale Scheduler")
+    plt.xlabel("Step")
+    plt.ylabel("Guidance Scale")
+    plt.savefig(str(Path(logger.log_dir) / 'guidance_scheduler.png'))
+    plt.close()
+    # np.savetxt(str(Path(logger.log_dir) / 'guidance_scheduler.txt'), guidance_scale_itr.cpu().numpy())
 
-    # # coeffs tweaking:
-    # insert_start, insert_end = 0.79, 0.80
-    # insert_steps = 3000
-    # insert_coeffs = torch.linspace(insert_start, insert_end, insert_steps)
-    # coeffs = torch.cat((coeffs, insert_coeffs)).sort().values
+    # Plot and save interpolation_coeff pattern
+    plt.figure()
+    plt.plot(coeffs.cpu().numpy())
+    plt.title("Interpolation Coefficient")
+    plt.xlabel("Step")
+    plt.ylabel("Interpolation Coefficient")
+    plt.savefig(str(Path(logger.log_dir) / 'interpolation_coeff.png'))
+    plt.close()
+    np.savetxt(str(Path(logger.log_dir) / 'interpolation_coeff.txt'), coeffs.cpu().numpy())
 
-    # log params:
+    # log params
     params_log_file = str(Path(logger.log_dir) / 'params.txt')
     with open(params_log_file, 'w') as f:
         f.write(f"start_state_category: {start_state_category}\n")
@@ -451,13 +478,17 @@ def sample_alanine_transition_pathDDPM(
         f.write(f"treshold: {treshold}\n")
         f.write(f"eval_every: {eval_every}\n")
         f.write(f"path_len: {path_len}\n")
-        # f.write(f"guidance_scale: {guidance_scale}\n")
+        f.write(f"max guidance_scale: {guidance_scale}\n")
+        f.write(f"min guidance_scale: {min_guidance}\n")
+        f.write(f"alpha: {alpha}\n")
 
-
+    x_clean = None
+    itr = 0
+    x_tmp = start_pos
+    log_file = str(Path(logger.log_dir) / 'rmsd_log.txt')
     interpolation_coeff = coeffs[itr]
-    guidance_scale = guidance_scale_itr[itr]
-
-    for _ in range(coeffs.shape[0]):
+    # guidance_scale = guidance_scale_itr[itr]
+    while True:
         x_tmp_new = single_DDPM_step( # single FF step
             atom_types=atom_types,
             device=device,
@@ -471,8 +502,10 @@ def sample_alanine_transition_pathDDPM(
             diff_module=diff_module,
             target_lbl=target_state_category,
             interpolation_coeff=interpolation_coeff,
+            alpha=alpha,
         )
 
+        x_clean = None
         if itr % eval_every == 0:
             print(f"iter {itr} - interpolation_coeff: {interpolation_coeff}, guidance_scale: {guidance_scale}")
             x_clean = ddpm_sampling(
@@ -480,43 +513,156 @@ def sample_alanine_transition_pathDDPM(
                 condition_class=start_state_category,
                 guidance_scale=guidance_scale,
                 iter_epochs=1,
-                forced_log_dir=str(Path(logger.log_dir) / f'TP_itr_{itr}'),
+                forced_log_dir=str(Path(logger.log_dir) / 'path' / f'TP_itr_{itr}'),
                 initial_rand_pos=x_tmp_new, # if not None, will use this as initial position instead of sampling from prior
                 force_tmax=t-1,
                 target_lbl=target_state_category,
                 interpolation_coeff=interpolation_coeff,
             )
-        else:
-            x_clean = None
 
         x_tmp = x_tmp_new
-        # positions_for_gif.append(x_tmp_new.clone().detach())
         if x_clean != None:
             rmsd_value = rmsd(x_clean, ref_mol, atom_types, itr, log_file)
             with open(log_file, "a") as f:
-                f.write(f"itr {itr}, rmsd: {rmsd_value:.3f}, coeff {interpolation_coeff}, guidance {guidance_scale}\n")
+                f.write(f"from {start_state_category} to {target_state_category}, itr {itr}, rmsd: {rmsd_value:.3f}, interpolation_coeff {interpolation_coeff}, guidance_scale {guidance_scale}\n")
 
         itr+=1
-        interpolation_coeff = coeffs[itr]
-        guidance_scale = guidance_scale_itr[itr]
+        try:
+            interpolation_coeff = coeffs[itr]
+            # guidance_scale = guidance_scale_itr[itr]
+        except:
+            interpolation_coeff = coeffs[-1]
+            # guidance_scale = guidance_scale_itr[-1] #+ (itr* 0.0001)
 
         if rmsd_value < treshold:
             break
 
-    # logger.log(trainer.iepoch, 0, positions_for_gif, condition_class, guidance_scale, TMax, atom_types)
 
 
 
+# @torch.no_grad()
+# @torch.amp.autocast('cuda', enabled=False)
+# def sample_alanine_transition_pathDDPM_SEQUENITAL(
+#     trainer,
+#     states_list:list[int],
+#     forced_log_dir:str=None,
+# ):
+#     # C5: 0
+#     # PII: 1
+#     # alphaP: 2 WRONG
+#     # alphaR: 3
+#     # C7ax: 4
+#     # alphaL: 5
 
+#     start_state_category = states_list[0]
+#     target_state_category = states_list[-1]
+#     model, diff_module, device, TMax, atom_types, log_dir, labels_conditioned, number_of_labels = fetch(trainer)
+#     exp_name = 'TPS_from_{}_to_{}'.format(start_state_category, target_state_category)
 
+#     base_exp_dir = forced_log_dir if forced_log_dir else log_dir
+#     exp_name = get_unique_exp_name(base_exp_dir, exp_name)
+#     logger = DiffusionSamplerLogger(base_exp_dir, exp_name)
 
+#     # generate start state
+#     start_pos = ddim_sampling(
+#         trainer,
+#         iter_epochs=1,
+#         condition_class = start_state_category,
+#         forced_log_dir=str(Path(logger.log_dir) / 'start_state'),
+#     )
 
+#     #! hyperparameters
+#     eval_every = 50
+#     treshold = .29
+#     t = 8
+#     path_len = 7000
+#     coeffs = torch.linspace(0, 1, path_len)
+#     min_guidance = 0.0
+#     guidance_scale = 3.0
+#     guidance_scale_itr = guidance_scale_scheduler(path_len,  min_guidance=min_guidance, max_guidance=guidance_scale)
 
+#     # log params
+#     log_file = str(Path(logger.log_dir) / 'rmsd_log.txt')
+#     params_log_file = str(Path(logger.log_dir) / 'params.txt')
+#     with open(params_log_file, 'w') as f:
+#         f.write(f"start_state_category: {start_state_category}\n")
+#         f.write(f"target_state_category: {target_state_category}\n")
+#         f.write(f"t: {t}\n")
+#         f.write(f"treshold: {treshold}\n")
+#         f.write(f"eval_every: {eval_every}\n")
+#         f.write(f"path_len: {path_len}\n")
+#         f.write(f"max guidance_scale: {guidance_scale}\n")
+#         f.write(f"min guidance_scale: {min_guidance}\n")
 
+#     # Create list of consecutive state transitions as tuples
+#     state_pairs = list(zip(states_list[:-1], states_list[1:]))
+#     for start_state_category, target_state_category in state_pairs:
+#         # generate temp target state
+#         target_pos = ddim_sampling(
+#             trainer,
+#             iter_epochs=1,
+#             condition_class = target_state_category,
+#             forced_log_dir=str(Path(logger.log_dir) / 'target_state'),
+#         )
+#         ref_mol = coords_atomicnum_to_mol(target_pos, atom_types, sanitize=False)
+
+#         x_clean = None
+#         itr = 0
+#         x_tmp = start_pos
+#         interpolation_coeff = coeffs[itr]
+#         guidance_scale = guidance_scale_itr[itr]
+
+#         # for _ in range(coeffs.shape[0]):
+#         while True:
+#             x_tmp_new = single_DDPM_step( # single FF step
+#                 atom_types=atom_types,
+#                 device=device,
+#                 x_t=x_tmp,
+#                 t=t,
+#                 model=model,
+#                 condition_class=start_state_category,
+#                 labels_conditioned=labels_conditioned,
+#                 number_of_labels=number_of_labels,
+#                 guidance_scale=guidance_scale,
+#                 diff_module=diff_module,
+#                 target_lbl=target_state_category,
+#                 interpolation_coeff=interpolation_coeff,
+#             )
+
+#             x_clean = None
+#             if itr % eval_every == 0:
+#                 print(f"from {start_state_category} to {target_state_category}, iter {itr} - interpolation_coeff: {interpolation_coeff}, guidance_scale: {guidance_scale}")
+#                 x_clean = ddpm_sampling(
+#                     trainer,
+#                     condition_class=start_state_category,
+#                     guidance_scale=guidance_scale,
+#                     iter_epochs=1,
+#                     forced_log_dir=str(Path(logger.log_dir) / f'TP_itr_{itr}'),
+#                     initial_rand_pos=x_tmp_new, # if not None, will use this as initial position instead of sampling from prior
+#                     force_tmax=t-1,
+#                     target_lbl=target_state_category,
+#                     interpolation_coeff=interpolation_coeff,
+#                 )
+
+#             x_tmp = x_tmp_new
+#             if x_clean != None:
+#                 rmsd_value = rmsd(x_clean, ref_mol, atom_types, itr, log_file)
+#                 with open(log_file, "a") as f:
+#                     f.write(f"from {start_state_category} to {target_state_category}, itr {itr}, rmsd: {rmsd_value:.3f}, interpolation_coeff {interpolation_coeff}, guidance_scale {guidance_scale}\n")
+
+#             itr+=1
+#             try:
+#                 interpolation_coeff = coeffs[itr]
+#                 guidance_scale = guidance_scale_itr[itr]
+#             except:
+#                 interpolation_coeff = coeffs[-1]
+#                 guidance_scale = guidance_scale_itr[-1] #+ (itr* 0.0001)
+
+#             if rmsd_value < treshold:
+#                 start_pos = x_tmp
+#                 break
 
 ###############
-
-
 # pseudo:
 # def sample_alanine_transition_path():
 #     x_a = ddim(wn, t = tmax, a)

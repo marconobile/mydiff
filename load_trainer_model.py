@@ -30,7 +30,7 @@ from geqtrain.train import (
     load_trainer_and_model,
 )
 
-from source.diffusion_utils.sample_with_diffusion import ddpm_sampling, ddim_sampling, sample_alanine_transition_pathDDPM
+from source.diffusion_utils.sample_with_diffusion import ddpm_sampling, ddim_sampling, sample_alanine_transition_pathDDPM #, sample_alanine_transition_pathDDPM_SEQUENITAL
 
 
 def parse_command_line(args=None) -> Tuple[argparse.Namespace, Config]:
@@ -194,16 +194,35 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         trainer.update_kwargs(config)
 
         # trainer.dataset_val[0]['node_types'].squeeze().to(device)
-        trainer.dataset_val = [{'node_types':torch.tensor([6, 6, 8, 7, 6, 6, 6, 8, 7, 6], dtype=torch.int64)}]
+        trainer.dataset_val = [{
+            'node_types':torch.tensor(
+                [6, 6, 8, 7, 6, 6, 6, 8, 7, 6]
+                # [6, 6, 8, 7, 6, 6, 6, 6, 6, 6, 8, 6, 6, 6, 8, 7, 6, 6, 6, 6, 6, 6, 8, 6, 6, 6, 8, 7, 6, 6, 6, 8, 8, 6, 8, 7, 6, 6, 6, 6, 6, 8, 7, 6, 6, 6, 6, 8, 8, 6, 8, 7, 6, 6, 8, 6, 6, 8, 7, 6, 6, 8, 7, 6, 6, 8, 6, 6, 8, 7, 6, 6, 6, 6, 7, 6, 6, 6, 6, 6, 6, 6, 8, 7, 6, 6, 6, 6, 6, 6, 8, 6, 6, 6, 8, 7, 6]
+            , dtype=torch.int64)
+        }]
 
         sample_alanine_transition_pathDDPM(
             trainer,
-            forced_log_dir='/home/nobilm@usi.ch/mydiff/testr_trans_path',
+            forced_log_dir='/home/nobilm@usi.ch/mydiff/tp_variety_experiments/from0to4',
         )
 
-        # n_samples = 5
-        # list_labels = [0,1,2,3,4,5,6,7]
+
+        # C5: 0
+        # PII: 1
+        # alphaP: 2 WRONG
+        # alphaR: 3
+        # C7ax: 4
+        # alphaL: 5
+        # sample_alanine_transition_pathDDPM_SEQUENITAL(
+        #     trainer,
+        #     states_list= [4, 3, 1, 0], # [0, 1, 3, 4],
+        #     forced_log_dir='/home/nobilm@usi.ch/mydiff/testr_trans_path',
+        # )
+
+        # n_samples = 1
+        # list_labels = [0,1,2,3,4] #[0,1,2,3,4,5,6,7]
         # sampler = 'ddim'
+        # forced_log_dir = '/home/nobilm@usi.ch/mydiff/data/alanine/chignolin_generated_per_label' # alanine_generated_per_label
         # for label in list_labels:
         #     if sampler == 'ddim':
         #         ddim_sampling(
@@ -213,7 +232,7 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         #             # t_init:int = 0,
         #             condition_class=label,
         #             guidance_scale=7.0,
-        #             forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
+        #             forced_log_dir=forced_log_dir,
         #             iter_epochs=1,
         #             n_samples=n_samples,
         #         )
@@ -222,7 +241,7 @@ def restart(rank, world_size, config: dict, train_dataset, validation_dataset, p
         #             trainer,
         #             condition_class=label,
         #             # guidance_scale:float = 7.0,
-        #             forced_log_dir='/home/nobilm@usi.ch/mydiff/data/alanine/alanine_generated_per_label',
+        #             forced_log_dir=forced_log_dir,
         #             n_samples=n_samples,
         #             iter_epochs=1,
         #         )
