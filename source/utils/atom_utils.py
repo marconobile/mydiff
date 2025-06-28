@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from typing import Dict, List, Set, Tuple
 
-class AtomTypeMapper:
+class AtomTypeMapper(torch.nn.Module):
     """Utility class to map between atomic numbers and sequential indices for one-hot encoding."""
 
     def __init__(self, atomic_numbers: Set[int]):
@@ -12,6 +12,7 @@ class AtomTypeMapper:
         Args:
             atomic_numbers: Set of atomic numbers present in your dataset
         """
+        super().__init__()
         # Sort atomic numbers to ensure consistent mapping
         self.atomic_numbers = sorted(list(atomic_numbers))
         # Create bidirectional mappings

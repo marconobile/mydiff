@@ -31,7 +31,7 @@ class OneHotAtomEncodingFromAtomNum(GraphModuleMixin, torch.nn.Module):
         self.scaling_factor = scaling_factor
 
         atomic_numbers = {1, 2, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16, 17, 18, 20, 22, 30, 31, 32, 33, 34, 35} # Your unique atomic numbers in dataset
-        self.atomnum2onehot = AtomTypeMapper(atomic_numbers)
+        self.atomnum2onehot:AtomTypeMapper = AtomTypeMapper(atomic_numbers)
 
         # Output irreps are num_types even (invariant) scalars
         irreps_out = {AtomicDataDict.NODE_ATTRS_KEY: Irreps([(self.num_types, (0, 1))])}
@@ -40,8 +40,9 @@ class OneHotAtomEncodingFromAtomNum(GraphModuleMixin, torch.nn.Module):
         self._init_irreps(irreps_in=irreps_in, irreps_out=irreps_out) # my guess: None -> NatomsTypes of l = 0, defines inpt/outpt shapes
 
     def forward(self, data: AtomicDataDict.Type) -> AtomicDataDict.Type:
-        if data.get(AtomicDataDict.NODE_ATTRS_KEY, None) is None:
-            type_numbers = data.get(AtomicDataDict.NODE_TYPE_KEY).squeeze(-1)
+        # if data.get(AtomicDataDict.NODE_ATTRS_KEY, None) is None:
+        if AtomicDataDict.NODE_ATTRS_KEY not in data:
+            type_numbers = data[AtomicDataDict.NODE_TYPE_KEY].squeeze(-1)
 
             #! bug in my atomic number encoding
             # with torch.no_grad():
